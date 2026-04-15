@@ -1,0 +1,25 @@
+from django.contrib import admin
+from django.urls import include, path
+
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("api/v1/auth/", include("apps.accounts.api.urls")),
+    path("api/v1/employees/", include("apps.employees.api.urls")),
+    path("api/v1/attendance/", include("apps.attendance.api.urls")),
+    path("api/v1/leave/", include("apps.leave_management.api.urls")),
+    path("api/v1/dashboard/", include("apps.core.api.urls")),
+    path("api/v1/workflow/", include("apps.workflow.api.urls")),
+    path("api/v1/audit/", include("apps.audit.api.urls")),
+    path("api/v1/notifications/", include("apps.notifications.api.urls")),
+    path("api/v1/holidays/", include("apps.holidays.api.urls")),
+    path("api/v1/reports/", include("apps.reports.api.urls")),
+    path("api/v1/payroll/", include("apps.payroll.api.urls")),
+    path("api/v1/performance/", include("apps.performance.api.urls")),
+    path("api/v1/documents/", include("apps.documents.api.urls")),
+    path("api/v1/lifecycle/", include("apps.lifecycle.api.urls")),
+    path("api/v1/scheduling/", include("apps.scheduling.api.urls")),
+    path("api/v1/announcements/", include("apps.announcements.api.urls")),
+    path("api/v1/analytics/", include("apps.analytics.api.urls")),
+    path("api/v1/policy-rules/", include("apps.policy_engine.api.urls")),
+    path("api/v1/helpdesk/", include("apps.helpdesk.api.urls")),
+]

@@ -16,7 +16,16 @@ class DepartmentSerializer(serializers.ModelSerializer):
 class OrganizationSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrganizationSettings
-        fields = ("id", "organization_name", "company_policies", "created_at", "updated_at")
+        fields = (
+            "id",
+            "organization_name",
+            "company_policies",
+            "office_latitude",
+            "office_longitude",
+            "office_radius_meters",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = ("id", "created_at", "updated_at")
 
 
@@ -46,13 +55,13 @@ class EmployeeSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     password = serializers.CharField(write_only=True, required=False, allow_blank=False)
+    force_password_reset = serializers.BooleanField(write_only=True, required=False, default=False)
     full_name = serializers.CharField(source="user.full_name", read_only=True)
     department_name = serializers.CharField(source="department.name", read_only=True)
     manager_name = serializers.CharField(source="manager.user.full_name", read_only=True)
     secondary_manager_name = serializers.CharField(source="secondary_manager.user.full_name", read_only=True)
     shift_template_name = serializers.CharField(source="shift_template.name", read_only=True)
     monthly_gross_salary = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    estimated_monthly_net_salary = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     can_view_compensation = serializers.SerializerMethodField()
 
     class Meta:
@@ -67,6 +76,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "full_name",
             "role",
             "password",
+            "force_password_reset",
             "department",
             "department_name",
             "manager",
@@ -85,13 +95,12 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "shift_start_time",
             "shift_end_time",
             "ctc_per_annum",
-            "monthly_fixed_deductions",
             "monthly_gross_salary",
-            "estimated_monthly_net_salary",
             "can_view_compensation",
             "address",
             "emergency_contact_name",
             "emergency_contact_phone",
+            "personal_email",
             "is_active",
             "created_at",
             "updated_at",
@@ -106,7 +115,6 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "secondary_manager_name",
             "shift_template_name",
             "monthly_gross_salary",
-            "estimated_monthly_net_salary",
             "can_view_compensation",
         )
 
@@ -186,15 +194,19 @@ class EmployeeSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
         if not user or not getattr(user, "is_authenticated", False):
             return False
-        if user.role in {User.Role.MANAGER, User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN}:
+        if user.role in {User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN}:
             return True
-        return obj.user_id == user.pk
+        if obj.user_id == user.pk:
+            return True
+        if user.role == User.Role.MANAGER:
+            viewer_employee = getattr(user, "employee_profile", None)
+            if viewer_employee and (obj.manager_id == viewer_employee.pk or obj.secondary_manager_id == viewer_employee.pk):
+                return True
+        return False
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         if not self.get_can_view_compensation(instance):
             data["ctc_per_annum"] = None
-            data["monthly_fixed_deductions"] = None
             data["monthly_gross_salary"] = None
-            data["estimated_monthly_net_salary"] = None
         return data

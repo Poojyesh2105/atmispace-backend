@@ -1,3 +1,4 @@
+from rest_framework import serializers as drf_serializers
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenRefreshView
@@ -59,4 +60,27 @@ class MeView(APIView):
     def get(self, request):
         user = AuthService.get_user_profile(request.user)
         return success_response(data=UserSerializer(user).data)
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        new_password = request.data.get("new_password", "")
+        current_password = request.data.get("current_password", "")
+
+        if not new_password:
+            raise drf_serializers.ValidationError({"new_password": "This field is required."})
+
+        if not user.force_password_reset:
+            if not current_password:
+                raise drf_serializers.ValidationError({"current_password": "This field is required."})
+            if not user.check_password(current_password):
+                raise drf_serializers.ValidationError({"current_password": "Current password is incorrect."})
+
+        user.set_password(new_password)
+        user.force_password_reset = False
+        user.save(update_fields=["password", "force_password_reset"])
+        return success_response(message="Password changed successfully.")
 

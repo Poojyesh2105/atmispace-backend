@@ -52,7 +52,6 @@ class Command(BaseCommand):
                 "hire_date": "2022-01-10",
                 "shift_template": morning_shift,
                 "ctc_per_annum": Decimal("1800000.00"),
-                "monthly_fixed_deductions": Decimal("18000.00"),
             },
             {
                 "email": "hr@atmispace.com",
@@ -66,7 +65,6 @@ class Command(BaseCommand):
                 "hire_date": "2022-03-04",
                 "shift_template": morning_shift,
                 "ctc_per_annum": Decimal("1200000.00"),
-                "monthly_fixed_deductions": Decimal("12000.00"),
             },
             {
                 "email": "manager@atmispace.com",
@@ -80,7 +78,6 @@ class Command(BaseCommand):
                 "hire_date": "2021-11-15",
                 "shift_template": morning_shift,
                 "ctc_per_annum": Decimal("1560000.00"),
-                "monthly_fixed_deductions": Decimal("14500.00"),
             },
             {
                 "email": "employee@atmispace.com",
@@ -94,7 +91,6 @@ class Command(BaseCommand):
                 "hire_date": "2023-06-12",
                 "shift_template": morning_shift,
                 "ctc_per_annum": Decimal("840000.00"),
-                "monthly_fixed_deductions": Decimal("6500.00"),
             },
             {
                 "email": "ops@atmispace.com",
@@ -108,7 +104,6 @@ class Command(BaseCommand):
                 "hire_date": "2024-01-08",
                 "shift_template": night_shift,
                 "ctc_per_annum": Decimal("600000.00"),
-                "monthly_fixed_deductions": Decimal("4200.00"),
             },
             {
                 "email": "accounts@atmispace.com",
@@ -122,7 +117,6 @@ class Command(BaseCommand):
                 "hire_date": "2023-09-01",
                 "shift_template": morning_shift,
                 "ctc_per_annum": Decimal("900000.00"),
-                "monthly_fixed_deductions": Decimal("7000.00"),
             },
         ]
 
@@ -163,7 +157,6 @@ class Command(BaseCommand):
                     "shift_start_time": record["shift_template"].start_time,
                     "shift_end_time": record["shift_template"].end_time,
                     "ctc_per_annum": record["ctc_per_annum"],
-                    "monthly_fixed_deductions": record["monthly_fixed_deductions"],
                     "phone_number": "+91-9999999999",
                     "address": "Bengaluru, India",
                     "emergency_contact_name": "Primary Contact",

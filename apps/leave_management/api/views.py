@@ -10,10 +10,13 @@ from apps.leave_management.serializers import (
     EarnedLeaveAdjustmentSerializer,
     LeaveApplySerializer,
     LeaveBalanceSerializer,
+    LeaveCarryForwardLogSerializer,
     LeavePolicySerializer,
     LeaveDecisionSerializer,
     LeaveRequestSerializer,
+    ProcessCarryForwardSerializer,
 )
+from apps.leave_management.services.carry_forward_service import LeaveCarryForwardService
 from apps.leave_management.services.leave_service import (
     EarnedLeaveAdjustmentService,
     LeaveBalanceService,
@@ -254,3 +257,19 @@ class EarnedLeaveAdjustmentViewSet(viewsets.ReadOnlyModelViewSet):
             approver_note=serializer.validated_data.get("approver_note", ""),
         )
         return success_response(data=self.get_serializer(adjustment).data, message="Earned leave adjustment rejected.")
+
+
+class ProcessCarryForwardView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrHR]
+
+    def post(self, request):
+        from datetime import date
+
+        serializer = ProcessCarryForwardSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        target_month = serializer.validated_data.get("month") or date.today().replace(day=1)
+        count = LeaveCarryForwardService.process_carry_forward(target_month)
+        return success_response(
+            data={"employees_processed": count, "target_month": target_month.strftime("%Y-%m")},
+            message=f"Leave carry forward processed for {count} employee(s).",
+        )

@@ -22,6 +22,18 @@ class Department(TimestampedModel):
 class OrganizationSettings(TimestampedModel):
     organization_name = models.CharField(max_length=180, default="Organization")
     company_policies = models.TextField(blank=True)
+    office_latitude = models.DecimalField(
+        max_digits=9, decimal_places=6, null=True, blank=True,
+        help_text="Office GPS latitude for geo-fencing attendance"
+    )
+    office_longitude = models.DecimalField(
+        max_digits=9, decimal_places=6, null=True, blank=True,
+        help_text="Office GPS longitude for geo-fencing attendance"
+    )
+    office_radius_meters = models.PositiveIntegerField(
+        default=200,
+        help_text="Radius in metres within which check-in counts as PRESENT (on-site)"
+    )
 
     class Meta:
         verbose_name_plural = "Organization settings"
@@ -102,10 +114,10 @@ class Employee(TimestampedModel):
     shift_start_time = models.TimeField(default=time(hour=9, minute=0))
     shift_end_time = models.TimeField(default=time(hour=18, minute=0))
     ctc_per_annum = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    monthly_fixed_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     address = models.TextField(blank=True)
     emergency_contact_name = models.CharField(max_length=120, blank=True)
     emergency_contact_phone = models.CharField(max_length=20, blank=True)
+    personal_email = models.EmailField(blank=True, default="")
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -117,7 +129,3 @@ class Employee(TimestampedModel):
     @property
     def monthly_gross_salary(self):
         return (self.ctc_per_annum or Decimal("0")) / Decimal("12")
-
-    @property
-    def estimated_monthly_net_salary(self):
-        return max(self.monthly_gross_salary - (self.monthly_fixed_deductions or Decimal("0")), Decimal("0"))

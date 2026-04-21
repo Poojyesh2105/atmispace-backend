@@ -21,7 +21,6 @@ class PayrollGovernanceServiceTestCase(TestCase):
             department=department,
             hire_date=date.today(),
             ctc_per_annum=Decimal("600000.00"),
-            monthly_fixed_deductions=Decimal("1000.00"),
         )
         self.cycle = PayrollCycle.objects.create(
             name="Apr 2026",
@@ -50,7 +49,6 @@ class PayrollGovernanceServiceTestCase(TestCase):
             department=self.employee.department,
             hire_date=date.today(),
             ctc_per_annum=Decimal("0.00"),
-            monthly_fixed_deductions=Decimal("0.00"),
         )
 
         run = PayrollGovernanceService.generate_run(self.accounts_user, self.cycle)

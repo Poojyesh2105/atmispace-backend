@@ -22,6 +22,9 @@ class Attendance(TimestampedModel):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PRESENT, db_index=True)
     notes = models.TextField(blank=True)
     total_work_minutes = models.PositiveIntegerField(default=0)
+    check_in_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    check_in_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    check_in_accuracy_meters = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
 
     class Meta:
         ordering = ["-attendance_date", "-check_in"]

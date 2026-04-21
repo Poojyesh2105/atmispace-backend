@@ -31,7 +31,7 @@ def custom_exception_handler(exc, context):
     response.data = {
         "success": False,
         "message": message,
-        "data": response.data if isinstance(response.data, dict) else {},
+        "data": None,
     }
     if response.status_code == status.HTTP_401_UNAUTHORIZED:
         response.data["message"] = "Authentication credentials were invalid or missing."

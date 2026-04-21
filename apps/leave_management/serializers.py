@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from apps.leave_management.models import EarnedLeaveAdjustment, LeaveBalance, LeavePolicy, LeaveRequest
+from apps.leave_management.models import EarnedLeaveAdjustment, LeaveBalance, LeaveCarryForwardLog, LeavePolicy, LeaveRequest
 from apps.workflow.models import Workflow
 from apps.workflow.services.workflow_service import WorkflowService
 
@@ -39,10 +39,64 @@ class LeavePolicySerializer(serializers.ModelSerializer):
             "monthly_earned_leave_limit",
             "compensate_with_earned_leave",
             "excess_leave_becomes_lop",
+            "enable_carry_forward",
+            "max_carry_forward_days",
+            "carry_forward_leave_types",
+            "carry_forward_frequency",
             "created_at",
             "updated_at",
         )
         read_only_fields = ("id", "created_at", "updated_at")
+
+
+class ProcessCarryForwardSerializer(serializers.Serializer):
+    month = serializers.CharField(
+        required=False,
+        help_text=(
+            "Target period to receive carry-forward, in YYYY-MM format. "
+            "Monthly policies use the selected month. Yearly policies use January of the selected year."
+        ),
+    )
+
+    def validate_month(self, value):
+        from datetime import datetime
+        try:
+            parsed = datetime.strptime(value, "%Y-%m")
+            return parsed.date().replace(day=1)
+        except ValueError:
+            raise serializers.ValidationError("Month must be in YYYY-MM format (e.g. '2024-01').")
+
+
+class LeaveCarryForwardLogSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source="employee.user.full_name", read_only=True)
+    employee_code = serializers.CharField(source="employee.employee_id", read_only=True)
+
+    class Meta:
+        model = LeaveCarryForwardLog
+        fields = (
+            "id",
+            "employee",
+            "employee_code",
+            "employee_name",
+            "leave_type",
+            "from_month",
+            "to_month",
+            "unused_days",
+            "carried_forward_days",
+            "created_at",
+        )
+        read_only_fields = (
+            "id",
+            "employee",
+            "employee_code",
+            "employee_name",
+            "leave_type",
+            "from_month",
+            "to_month",
+            "unused_days",
+            "carried_forward_days",
+            "created_at",
+        )
 
 
 class LeaveRequestSerializer(serializers.ModelSerializer):

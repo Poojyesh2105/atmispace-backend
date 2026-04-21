@@ -18,6 +18,7 @@ class UserSerializer(serializers.ModelSerializer):
             "role",
             "is_active",
             "date_joined",
+            "force_password_reset",
         )
         read_only_fields = ("id", "date_joined")
 

@@ -40,7 +40,6 @@ class Command(BaseCommand):
             "hire_date": date(2022, 1, 10),
             "shift_template": morning_shift,
             "ctc_per_annum": Decimal("1800000.00"),
-            "monthly_fixed_deductions": Decimal("18000.00"),
         }
 
         user, created = User.objects.get_or_create(
@@ -80,7 +79,6 @@ class Command(BaseCommand):
                 "shift_start_time": record["shift_template"].start_time,
                 "shift_end_time": record["shift_template"].end_time,
                 "ctc_per_annum": record["ctc_per_annum"],
-                "monthly_fixed_deductions": record["monthly_fixed_deductions"],
                 "phone_number": "+91-9999999999",
                 "address": "Bengaluru, India",
                 "emergency_contact_name": "Primary Contact",

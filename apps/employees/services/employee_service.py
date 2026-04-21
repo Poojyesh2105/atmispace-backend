@@ -55,6 +55,7 @@ class EmployeeService:
 
         user_data = validated_data.pop("user")
         password = validated_data.pop("password", None)
+        force_password_reset = validated_data.pop("force_password_reset", False)
         user = User.objects.create_user(
             email=user_data["email"],
             password=password or "ChangeMe123!",
@@ -62,6 +63,9 @@ class EmployeeService:
             last_name=user_data["last_name"],
             role=user_data.get("role", User.Role.EMPLOYEE),
         )
+        if force_password_reset:
+            user.force_password_reset = True
+            user.save(update_fields=["force_password_reset"])
         employee = Employee.objects.create(user=user, **validated_data)
         policy = LeavePolicyService.get_policy()
         default_allocations = {

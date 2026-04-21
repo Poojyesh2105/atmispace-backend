@@ -1,6 +1,8 @@
 from datetime import timedelta
 from pathlib import Path
 
+from celery.schedules import crontab
+
 from django.core.exceptions import ImproperlyConfigured
 from decouple import Csv, config
 
@@ -137,6 +139,12 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    "monthly-leave-carry-forward": {
+        "task": "apps.leave_management.tasks.process_monthly_leave_carry_forward",
+        "schedule": crontab(minute=0, hour=0, day_of_month=1),
+    },
+}
 
 EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = config("EMAIL_HOST", default="localhost")

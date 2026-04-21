@@ -5,25 +5,6 @@ from apps.core.models import TimestampedModel
 from apps.employees.models import Employee
 
 
-class DeductionRule(TimestampedModel):
-    class CalculationType(models.TextChoices):
-        FIXED = "FIXED", "Fixed"
-        PERCENT = "PERCENT", "Percent"
-
-    name = models.CharField(max_length=140)
-    code = models.CharField(max_length=40, unique=True)
-    description = models.TextField(blank=True)
-    calculation_type = models.CharField(max_length=20, choices=CalculationType.choices, default=CalculationType.FIXED)
-    value = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ["name"]
-
-    def __str__(self):
-        return self.name
-
-
 class PayrollCycle(TimestampedModel):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
@@ -158,11 +139,18 @@ class Payslip(TimestampedModel):
         blank=True,
     )
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="payslips")
+    salary_component_template = models.ForeignKey(
+        "SalaryComponentTemplate",
+        on_delete=models.SET_NULL,
+        related_name="payslips",
+        null=True,
+        blank=True,
+    )
+    salary_component_template_name = models.CharField(max_length=140, blank=True)
     payroll_month = models.DateField(help_text="Normalized to the first day of the payroll month.")
     gross_monthly_salary = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     additional_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    fixed_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    rule_based_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    component_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     adjustment_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     lop_days = models.DecimalField(max_digits=6, decimal_places=2, default=0)
     lop_deduction = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -193,3 +181,134 @@ class Payslip(TimestampedModel):
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.payroll_month.isoformat()}"
+
+
+class SalaryComponentTemplate(TimestampedModel):
+    name = models.CharField(max_length=140, unique=True)
+    description = models.TextField(blank=True)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-is_default", "name"]
+
+    def __str__(self):
+        return self.name
+
+
+class EmployeeSalaryComponentTemplate(TimestampedModel):
+    employee = models.OneToOneField(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="salary_component_template_assignment",
+    )
+    template = models.ForeignKey(
+        SalaryComponentTemplate,
+        on_delete=models.PROTECT,
+        related_name="employee_assignments",
+    )
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="assigned_salary_component_templates",
+        null=True,
+        blank=True,
+    )
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["employee__employee_id"]
+
+    def __str__(self):
+        return f"{self.employee.employee_id} - {self.template.name}"
+
+
+class SalaryComponent(TimestampedModel):
+    class ComponentType(models.TextChoices):
+        EARNING = "EARNING", "Earning"
+        DEDUCTION = "DEDUCTION", "Deduction"
+
+    class CalculationType(models.TextChoices):
+        FIXED = "FIXED", "Fixed Amount"
+        PERCENT_OF_GROSS = "PERCENT_OF_GROSS", "% of Gross"
+        PERCENT_OF_CTC = "PERCENT_OF_CTC", "% of CTC"
+        PERCENT_OF_COMPONENT = "PERCENT_OF_COMPONENT", "% of Component"
+
+    template = models.ForeignKey(
+        SalaryComponentTemplate,
+        on_delete=models.CASCADE,
+        related_name="components",
+    )
+    name = models.CharField(max_length=140)
+    code = models.CharField(max_length=40)
+    component_type = models.CharField(max_length=20, choices=ComponentType.choices)
+    calculation_type = models.CharField(max_length=30, choices=CalculationType.choices, default=CalculationType.FIXED)
+    base_component = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="dependent_components",
+        null=True,
+        blank=True,
+        help_text="Component used as the base when calculation type is % of Component.",
+    )
+    value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    display_order = models.PositiveSmallIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    is_taxable = models.BooleanField(default=False)
+    is_part_of_gross = models.BooleanField(
+        default=True,
+        help_text="For earning components, mark whether the amount is already part of monthly gross salary.",
+    )
+    has_employer_contribution = models.BooleanField(default=False)
+    employer_contribution_value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    deduct_employer_contribution = models.BooleanField(
+        default=False,
+        help_text="For deductions, include employer contribution in employee deductions when enabled.",
+    )
+    description = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["template__name", "display_order", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["template", "code"], name="unique_salary_component_template_code")
+        ]
+
+    def __str__(self):
+        return f"{self.template.name} - {self.name} ({self.code})"
+
+
+class PayslipComponentEntry(TimestampedModel):
+    payslip = models.ForeignKey(Payslip, on_delete=models.CASCADE, related_name="component_entries")
+    component = models.ForeignKey(SalaryComponent, on_delete=models.SET_NULL, null=True, blank=True, related_name="payslip_entries")
+    component_name = models.CharField(max_length=140)   # snapshot
+    component_code = models.CharField(max_length=40)    # snapshot
+    component_type = models.CharField(max_length=20, choices=SalaryComponent.ComponentType.choices)
+    calculated_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    employer_contribution_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    deducts_employer_contribution = models.BooleanField(default=False)
+    display_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["display_order", "component_name"]
+
+    def __str__(self):
+        return f"{self.payslip} - {self.component_name}"
+
+
+class PayslipTemplate(TimestampedModel):
+    name = models.CharField(max_length=140, unique=True)
+    description = models.TextField(blank=True)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    header_html = models.TextField(blank=True, help_text="HTML for the header section")
+    body_html = models.TextField(blank=True, help_text="HTML template body. Use {{employee_name}}, {{payroll_month}}, {{net_pay}}, {{components}} etc.")
+    footer_html = models.TextField(blank=True, help_text="HTML for the footer section")
+    css_styles = models.TextField(blank=True, help_text="Custom CSS for the template")
+    editor_config = models.JSONField(blank=True, default=dict, help_text="No-code editor settings used to generate the template source.")
+    show_component_breakdown = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-is_default", "name"]
+
+    def __str__(self):
+        return self.name

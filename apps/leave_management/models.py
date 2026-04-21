@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import UniqueConstraint
 
 from apps.core.models import TimestampedModel
 from apps.employees.models import Employee
@@ -35,6 +36,10 @@ class LeaveBalance(TimestampedModel):
 
 
 class LeavePolicy(TimestampedModel):
+    class CarryForwardFrequency(models.TextChoices):
+        MONTHLY = "MONTHLY", "Monthly"
+        YEARLY = "YEARLY", "Yearly"
+
     casual_days_onboarding = models.DecimalField(max_digits=5, decimal_places=1, default=0)
     sick_days_onboarding = models.DecimalField(max_digits=5, decimal_places=1, default=0)
     earned_days_onboarding = models.DecimalField(max_digits=5, decimal_places=1, default=0)
@@ -42,6 +47,14 @@ class LeavePolicy(TimestampedModel):
     monthly_earned_leave_limit = models.DecimalField(max_digits=5, decimal_places=1, default=0)
     compensate_with_earned_leave = models.BooleanField(default=True)
     excess_leave_becomes_lop = models.BooleanField(default=True)
+    enable_carry_forward = models.BooleanField(default=False)
+    max_carry_forward_days = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    carry_forward_leave_types = models.JSONField(default=list)
+    carry_forward_frequency = models.CharField(
+        max_length=20,
+        choices=CarryForwardFrequency.choices,
+        default=CarryForwardFrequency.MONTHLY,
+    )
 
     class Meta:
         verbose_name_plural = "Leave policies"
@@ -123,3 +136,24 @@ class EarnedLeaveAdjustment(TimestampedModel):
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.work_date} - {self.status}"
+
+
+class LeaveCarryForwardLog(TimestampedModel):
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="carry_forward_logs")
+    leave_type = models.CharField(max_length=20, choices=LeaveBalance.LeaveType.choices)
+    from_month = models.DateField()
+    to_month = models.DateField()
+    unused_days = models.DecimalField(max_digits=5, decimal_places=1)
+    carried_forward_days = models.DecimalField(max_digits=5, decimal_places=1)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            UniqueConstraint(
+                fields=["employee", "leave_type", "from_month"],
+                name="unique_carry_forward_per_month",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.employee.employee_id} - {self.leave_type} - {self.from_month}"

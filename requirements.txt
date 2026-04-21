@@ -6,4 +6,4 @@ psycopg[binary]==3.2.3
 python-decouple==3.8
 celery==5.4.0
 redis==5.2.0
-
+WeasyPrint==68.1

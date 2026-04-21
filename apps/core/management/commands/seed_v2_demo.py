@@ -25,7 +25,7 @@ from apps.leave_management.models import EarnedLeaveAdjustment, LeaveBalance, Le
 from apps.leave_management.services.leave_service import EarnedLeaveAdjustmentService, LeavePolicyService, LeaveRequestService
 from apps.lifecycle.models import EmployeeChangeRequest, EmployeeOnboarding, OffboardingCase, OnboardingPlan, OnboardingTaskTemplate
 from apps.lifecycle.services.lifecycle_service import EmployeeChangeRequestService, EmployeeOnboardingService, OffboardingService
-from apps.payroll.models import DeductionRule, PayrollAdjustment, PayrollCycle, PayrollRun, SalaryRevision
+from apps.payroll.models import PayrollAdjustment, PayrollCycle, PayrollRun, SalaryComponent, SalaryComponentTemplate, SalaryRevision
 from apps.payroll.services.payroll_governance_service import PayrollGovernanceService, SalaryRevisionService
 from apps.performance.models import PerformanceCycle, PerformanceGoal, PerformanceReview, RatingScale
 from apps.performance.services.performance_service import PerformanceGoalService, PerformanceReviewService
@@ -54,7 +54,6 @@ class Command(BaseCommand):
             "hire_date": "2022-08-01",
             "shift_name": "Morning",
             "ctc_per_annum": Decimal("1080000.00"),
-            "monthly_fixed_deductions": Decimal("8200.00"),
         },
         {
             "email": "newhire@atmispace.com",
@@ -69,7 +68,6 @@ class Command(BaseCommand):
             "hire_date": "2026-03-25",
             "shift_name": "Morning",
             "ctc_per_annum": Decimal("540000.00"),
-            "monthly_fixed_deductions": Decimal("3600.00"),
         },
         {
             "email": "departing@atmispace.com",
@@ -84,7 +82,6 @@ class Command(BaseCommand):
             "hire_date": "2024-04-10",
             "shift_name": "Night",
             "ctc_per_annum": Decimal("660000.00"),
-            "monthly_fixed_deductions": Decimal("4700.00"),
         },
     ]
 
@@ -190,7 +187,6 @@ class Command(BaseCommand):
                     "shift_start_time": shift_template.start_time,
                     "shift_end_time": shift_template.end_time,
                     "ctc_per_annum": record["ctc_per_annum"],
-                    "monthly_fixed_deductions": record["monthly_fixed_deductions"],
                     "phone_number": "+91-9000000000",
                     "address": "Bengaluru, India",
                     "emergency_contact_name": "Demo Contact",
@@ -1033,24 +1029,47 @@ class Command(BaseCommand):
             actor=accounts_user,
         )
 
-        deduction_rules = [
-            {
-                "code": "PF_DEMO",
+        salary_template, _ = SalaryComponentTemplate.objects.get_or_create(
+            name="Standard Salary Structure",
+            defaults={
+                "description": "Default salary component package used by demo employees.",
+                "is_default": True,
+                "is_active": True,
+            },
+        )
+        basic_component, _ = SalaryComponent.objects.update_or_create(
+            template=salary_template,
+            code="BASIC",
+            defaults={
+                "name": "Basic Salary",
+                "description": "Demo basic salary component.",
+                "component_type": SalaryComponent.ComponentType.EARNING,
+                "calculation_type": SalaryComponent.CalculationType.PERCENT_OF_GROSS,
+                "value": Decimal("50.00"),
+                "display_order": 10,
+                "is_active": True,
+                "is_taxable": True,
+                "is_part_of_gross": True,
+            },
+        )
+        SalaryComponent.objects.update_or_create(
+            template=salary_template,
+            code="PF",
+            defaults={
                 "name": "Provident Fund",
-                "description": "Demo PF deduction rule.",
-                "calculation_type": DeductionRule.CalculationType.PERCENT,
+                "description": "Demo PF deduction based on Basic Salary.",
+                "component_type": SalaryComponent.ComponentType.DEDUCTION,
+                "calculation_type": SalaryComponent.CalculationType.PERCENT_OF_COMPONENT,
+                "base_component": basic_component,
                 "value": Decimal("12.00"),
+                "display_order": 100,
+                "is_active": True,
+                "has_employer_contribution": True,
+                "employer_contribution_value": Decimal("12.00"),
+                "deduct_employer_contribution": False,
+                "is_part_of_gross": False,
             },
-            {
-                "code": "PT_DEMO",
-                "name": "Professional Tax",
-                "description": "Demo PT deduction rule.",
-                "calculation_type": DeductionRule.CalculationType.FIXED,
-                "value": Decimal("200.00"),
-            },
-        ]
-        for rule in deduction_rules:
-            DeductionRule.objects.update_or_create(code=rule["code"], defaults={**rule, "is_active": True})
+        )
 
         self._ensure_payroll_adjustment(
             current_cycle,

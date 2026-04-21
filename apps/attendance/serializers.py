@@ -16,6 +16,8 @@ class AttendanceSerializer(serializers.ModelSerializer):
     break_started_at = serializers.DateTimeField(read_only=True)
     is_on_break = serializers.SerializerMethodField()
     is_checked_in = serializers.SerializerMethodField()
+    check_in_distance_meters = serializers.SerializerMethodField()
+    work_location = serializers.SerializerMethodField()
 
     class Meta:
         model = Attendance
@@ -41,6 +43,11 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "active_work_hours",
             "shift_name",
             "expected_shift_minutes",
+            "check_in_latitude",
+            "check_in_longitude",
+            "check_in_accuracy_meters",
+            "check_in_distance_meters",
+            "work_location",
             "created_at",
             "updated_at",
         )
@@ -64,6 +71,11 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "active_work_hours",
             "shift_name",
             "expected_shift_minutes",
+            "check_in_latitude",
+            "check_in_longitude",
+            "check_in_accuracy_meters",
+            "check_in_distance_meters",
+            "work_location",
             "created_at",
             "updated_at",
         )
@@ -90,10 +102,38 @@ class AttendanceSerializer(serializers.ModelSerializer):
     def get_is_checked_in(self, obj):
         return bool(obj.current_session_check_in)
 
+    def get_check_in_distance_meters(self, obj):
+        from apps.attendance.services.attendance_service import AttendanceService
+
+        distance = AttendanceService.get_check_in_distance_meters(obj)
+        return round(distance, 1) if distance is not None else None
+
+    def get_work_location(self, obj):
+        from apps.attendance.services.attendance_service import AttendanceService
+
+        return AttendanceService.get_work_location(obj)
+
 
 class AttendanceActionSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True)
     status = serializers.ChoiceField(choices=Attendance.Status.choices, required=False)
+    check_in_latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False, allow_null=True)
+    check_in_longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False, allow_null=True)
+    check_in_accuracy_meters = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
+
+    def validate(self, attrs):
+        latitude = attrs.get("check_in_latitude")
+        longitude = attrs.get("check_in_longitude")
+        if (latitude is None) != (longitude is None):
+            raise serializers.ValidationError({"location": "Latitude and longitude must be supplied together."})
+        if latitude is not None and not (-90 <= latitude <= 90):
+            raise serializers.ValidationError({"check_in_latitude": "Latitude must be between -90 and 90."})
+        if longitude is not None and not (-180 <= longitude <= 180):
+            raise serializers.ValidationError({"check_in_longitude": "Longitude must be between -180 and 180."})
+        accuracy = attrs.get("check_in_accuracy_meters")
+        if accuracy is not None and accuracy < 0:
+            raise serializers.ValidationError({"check_in_accuracy_meters": "Accuracy cannot be negative."})
+        return attrs
 
 
 class AttendanceRegularizationSerializer(serializers.ModelSerializer):

@@ -1,7 +1,7 @@
 from django.db.models import Q
 
 from apps.accounts.models import User
-from apps.payroll.models import DeductionRule, PayrollAdjustment, PayrollCycle, PayrollRun, SalaryRevision
+from apps.payroll.models import PayrollAdjustment, PayrollCycle, PayrollRun, SalaryRevision
 
 
 class PayrollGovernanceSelectors:
@@ -40,8 +40,3 @@ class PayrollGovernanceSelectors:
         if employee:
             return queryset.filter(employee=employee)
         return queryset.none()
-
-    @staticmethod
-    def get_deduction_rule_queryset():
-        return DeductionRule.objects.all()
-

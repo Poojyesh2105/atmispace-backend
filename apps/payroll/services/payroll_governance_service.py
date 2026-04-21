@@ -10,7 +10,7 @@ from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
 from apps.employees.models import Employee
 from apps.notifications.services.notification_service import NotificationService
-from apps.payroll.models import DeductionRule, PayrollAdjustment, PayrollCycle, PayrollRun, Payslip, SalaryRevision
+from apps.payroll.models import PayrollAdjustment, PayrollCycle, PayrollRun, SalaryRevision
 from apps.payroll.services.payroll_service import PayslipService
 from apps.policy_engine.services.policy_rule_service import PolicyRuleService
 from apps.workflow.models import Workflow
@@ -60,33 +60,6 @@ class PayrollGovernanceService:
         return instance
 
     @staticmethod
-    def create_deduction_rule(validated_data, actor):
-        PayrollGovernanceService._check_manage_permission(actor)
-        rule = DeductionRule.objects.create(**validated_data)
-        AuditService.log(actor=actor, action="payroll.deduction_rule.created", entity=rule, after=rule)
-        return rule
-
-    @staticmethod
-    def update_deduction_rule(instance, validated_data, actor):
-        PayrollGovernanceService._check_manage_permission(actor)
-        before = AuditService.snapshot(instance)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        AuditService.log(actor=actor, action="payroll.deduction_rule.updated", entity=instance, before=before, after=instance)
-        return instance
-
-    @staticmethod
-    def _calculate_rule_deductions(gross_salary):
-        total = Decimal("0.00")
-        for rule in DeductionRule.objects.filter(is_active=True):
-            if rule.calculation_type == DeductionRule.CalculationType.FIXED:
-                total += Decimal(str(rule.value))
-            else:
-                total += (gross_salary * Decimal(str(rule.value)) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-    @staticmethod
     def _calculate_adjustments(employee, cycle):
         earnings = Decimal("0.00")
         deductions = Decimal("0.00")
@@ -113,30 +86,15 @@ class PayrollGovernanceService:
             if (employee.ctc_per_annum or Decimal("0")) <= 0:
                 skipped_employee_codes.append(employee.employee_id)
                 continue
-            base = PayslipService.calculate_payout(employee, cycle.payroll_month)
-            rule_based_deductions = PayrollGovernanceService._calculate_rule_deductions(base["gross_monthly_salary"])
             additional_earnings, adjustment_deductions = PayrollGovernanceService._calculate_adjustments(employee, cycle)
-            total_deductions = (
-                base["fixed_deductions"] + base["lop_deduction"] + rule_based_deductions + adjustment_deductions
-            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            net_pay = max(base["gross_monthly_salary"] + additional_earnings - total_deductions, Decimal("0.00")).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-            Payslip.objects.update_or_create(
+            PayslipService.generate_payslip(
+                actor,
                 employee=employee,
-                payroll_month=base["payroll_month"],
-                defaults={
-                    **base,
-                    "payroll_cycle": cycle,
-                    "additional_earnings": additional_earnings,
-                    "rule_based_deductions": rule_based_deductions,
-                    "adjustment_deductions": adjustment_deductions,
-                    "total_deductions": total_deductions,
-                    "net_pay": net_pay,
-                    "generated_by": actor,
-                    "notes": f"Generated from payroll cycle {cycle.name}",
-                    "generated_at": timezone.now(),
-                },
+                payroll_month=cycle.payroll_month,
+                notes=f"Generated from payroll cycle {cycle.name}",
+                payroll_cycle=cycle,
+                additional_earnings=additional_earnings,
+                adjustment_deductions=adjustment_deductions,
             )
             PayrollAdjustment.objects.filter(cycle=cycle, employee=employee, status=PayrollAdjustment.Status.PENDING).update(
                 status=PayrollAdjustment.Status.APPLIED

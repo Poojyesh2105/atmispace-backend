@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import Q
@@ -7,7 +8,9 @@ from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.attendance.models import Attendance
+from apps.attendance.services.geo_utils import GeoUtils
 from apps.audit.services.audit_service import AuditService
+from apps.employees.services.employee_service import OrganizationSettingsService
 
 
 class AttendanceService:
@@ -68,22 +71,86 @@ class AttendanceService:
         return queryset.none()
 
     @staticmethod
+    def get_check_in_distance_meters(attendance):
+        if attendance.check_in_latitude is None or attendance.check_in_longitude is None:
+            return None
+        settings = OrganizationSettingsService.get_settings()
+        if settings.office_latitude is None or settings.office_longitude is None:
+            return None
+        return GeoUtils.calculate_distance(
+            float(settings.office_latitude),
+            float(settings.office_longitude),
+            float(attendance.check_in_latitude),
+            float(attendance.check_in_longitude),
+        )
+
+    @staticmethod
+    def get_work_location(attendance):
+        distance = AttendanceService.get_check_in_distance_meters(attendance)
+        if attendance.check_in_latitude is None or attendance.check_in_longitude is None:
+            return "UNVERIFIED"
+        if distance is None:
+            return "UNCONFIGURED"
+
+        settings = OrganizationSettingsService.get_settings()
+        accuracy = float(attendance.check_in_accuracy_meters or Decimal("0"))
+        allowed_radius = float(settings.office_radius_meters or 0) + min(accuracy, 100)
+        return "OFFICE" if distance <= allowed_radius else "REMOTE"
+
+    @staticmethod
+    def _resolve_status_from_location(status, latitude, longitude, accuracy_meters):
+        if status == Attendance.Status.HALF_DAY:
+            return status
+        if latitude is None or longitude is None:
+            return status or Attendance.Status.PRESENT
+
+        settings = OrganizationSettingsService.get_settings()
+        if settings.office_latitude is None or settings.office_longitude is None:
+            return status or Attendance.Status.PRESENT
+
+        distance = GeoUtils.calculate_distance(
+            float(settings.office_latitude),
+            float(settings.office_longitude),
+            float(latitude),
+            float(longitude),
+        )
+        accuracy = float(accuracy_meters or Decimal("0"))
+        allowed_radius = float(settings.office_radius_meters or 0) + min(accuracy, 100)
+        return Attendance.Status.PRESENT if distance <= allowed_radius else Attendance.Status.REMOTE
+
+    @staticmethod
     @transaction.atomic
-    def check_in(user, notes="", status="PRESENT"):
+    def check_in(
+        user,
+        notes="",
+        status="PRESENT",
+        check_in_latitude=None,
+        check_in_longitude=None,
+        check_in_accuracy_meters=None,
+    ):
         employee = getattr(user, "employee_profile", None)
         if not employee:
             raise exceptions.PermissionDenied("Employee profile not found for the current user.")
 
         today = timezone.localdate()
         current_time = timezone.now()
+        resolved_status = AttendanceService._resolve_status_from_location(
+            status,
+            check_in_latitude,
+            check_in_longitude,
+            check_in_accuracy_meters,
+        )
         attendance, created = Attendance.objects.select_for_update().get_or_create(
             employee=employee,
             attendance_date=today,
             defaults={
-                "status": status,
+                "status": resolved_status,
                 "notes": notes,
                 "check_in": current_time,
                 "current_session_check_in": current_time,
+                "check_in_latitude": check_in_latitude,
+                "check_in_longitude": check_in_longitude,
+                "check_in_accuracy_meters": check_in_accuracy_meters,
             },
         )
         if not created and attendance.current_session_check_in:
@@ -98,7 +165,11 @@ class AttendanceService:
             attendance.break_minutes = 0
             attendance.total_work_minutes = 0
         attendance.notes = notes or attendance.notes
-        attendance.status = status
+        attendance.status = resolved_status
+        if attendance.check_in_latitude is None and check_in_latitude is not None:
+            attendance.check_in_latitude = check_in_latitude
+            attendance.check_in_longitude = check_in_longitude
+            attendance.check_in_accuracy_meters = check_in_accuracy_meters
         attendance.save()
         AuditService.log(actor=user, action="attendance.check_in", entity=attendance, after=attendance)
         return attendance

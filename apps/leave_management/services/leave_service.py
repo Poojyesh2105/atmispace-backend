@@ -1,5 +1,5 @@
 from decimal import Decimal
-from datetime import timedelta
+from datetime import date as _date, timedelta
 
 from django.db import transaction
 from django.db.models import Q
@@ -123,27 +123,33 @@ class LeaveRequestService:
             return
 
         requested_days_by_month = LeaveRequestService._get_days_by_month(validated_data, employee)
-        existing_requests = LeaveRequest.objects.filter(
-            employee=employee,
-            leave_type=leave_type,
-            status__in=[LeaveRequest.Status.PENDING, LeaveRequest.Status.APPROVED],
-            start_date__lte=validated_data["end_date"],
-            end_date__gte=validated_data["start_date"],
-        )
 
         for month_key, requested_days in requested_days_by_month.items():
             year, month = month_key.split("-")
+            year_int, month_int = int(year), int(month)
+            # Compute the first and last day of this calendar month.
+            month_start = _date(year_int, month_int, 1)
+            if month_int == 12:
+                next_month_start = _date(year_int + 1, 1, 1)
+            else:
+                next_month_start = _date(year_int, month_int + 1, 1)
+            month_end = next_month_start - timedelta(days=1)
+
+            # Fetch all existing requests for the same employee/leave_type that
+            # fall within this calendar month — not just those overlapping the
+            # new request's date range.
+            existing_requests = LeaveRequest.objects.filter(
+                employee=employee,
+                leave_type=leave_type,
+                status__in=[LeaveRequest.Status.PENDING, LeaveRequest.Status.APPROVED],
+                start_date__lte=month_end,
+                end_date__gte=month_start,
+            )
+
             consumed_days = Decimal("0")
             for leave_request in existing_requests:
-                overlap_start = max(
-                    leave_request.start_date,
-                    validated_data["start_date"].replace(year=int(year), month=int(month), day=1),
-                )
-                if int(month) == 12:
-                    next_month_start = overlap_start.replace(year=int(year) + 1, month=1, day=1)
-                else:
-                    next_month_start = overlap_start.replace(month=int(month) + 1, day=1)
-                overlap_end = min(leave_request.end_date, next_month_start - timedelta(days=1))
+                overlap_start = max(leave_request.start_date, month_start)
+                overlap_end = min(leave_request.end_date, month_end)
                 if overlap_start > overlap_end:
                     continue
                 slice_validated = {

@@ -68,6 +68,7 @@ class Employee(TimestampedModel):
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="employee_profile")
     employee_id = models.CharField(max_length=30, unique=True)
+    biometric_id = models.CharField(max_length=80, unique=True, null=True, blank=True)
     department = models.ForeignKey(
         Department,
         on_delete=models.SET_NULL,

@@ -53,9 +53,11 @@ class ReportService:
                 {"key": "attendance_date", "label": "Date"},
                 {"key": "shift_name", "label": "Shift"},
                 {"key": "status", "label": "Status"},
+                {"key": "source", "label": "Source"},
                 {"key": "check_in", "label": "Check In"},
                 {"key": "check_out", "label": "Check Out"},
                 {"key": "break_minutes", "label": "Break Minutes"},
+                {"key": "break_count", "label": "Break Count"},
                 {"key": "worked_minutes", "label": "Worked Minutes"},
             ],
             "leave": [

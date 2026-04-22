@@ -21,9 +21,11 @@ class AttendanceReportRowSerializer(serializers.ModelSerializer):
             "attendance_date",
             "shift_name",
             "status",
+            "source",
             "check_in",
             "check_out",
             "break_minutes",
+            "break_count",
             "worked_minutes",
         )
 

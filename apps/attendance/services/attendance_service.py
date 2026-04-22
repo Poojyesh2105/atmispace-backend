@@ -145,6 +145,7 @@ class AttendanceService:
             attendance_date=today,
             defaults={
                 "status": resolved_status,
+                "source": Attendance.Source.MANUAL,
                 "notes": notes,
                 "check_in": current_time,
                 "current_session_check_in": current_time,
@@ -166,6 +167,7 @@ class AttendanceService:
             attendance.total_work_minutes = 0
         attendance.notes = notes or attendance.notes
         attendance.status = resolved_status
+        attendance.source = Attendance.Source.MANUAL
         if attendance.check_in_latitude is None and check_in_latitude is not None:
             attendance.check_in_latitude = check_in_latitude
             attendance.check_in_longitude = check_in_longitude
@@ -198,6 +200,7 @@ class AttendanceService:
 
         attendance.check_out = current_time
         attendance.notes = notes or attendance.notes
+        attendance.source = Attendance.Source.MANUAL
         attendance.total_work_minutes = (attendance.total_work_minutes or 0) + session_work_minutes
         attendance.break_minutes = (attendance.break_minutes or 0) + (attendance.current_session_break_minutes or 0)
         attendance.current_session_check_in = None
@@ -221,7 +224,9 @@ class AttendanceService:
             raise exceptions.ValidationError({"attendance": "A break is already in progress."})
 
         attendance.break_started_at = timezone.now()
+        attendance.break_count = (attendance.break_count or 0) + 1
         attendance.notes = notes or attendance.notes
+        attendance.source = Attendance.Source.MANUAL
         attendance.save()
         AuditService.log(actor=user, action="attendance.break_started", entity=attendance, after=attendance)
         return attendance
@@ -243,6 +248,7 @@ class AttendanceService:
         attendance.current_session_break_minutes = AttendanceService.calculate_current_session_break_minutes(attendance)
         attendance.break_started_at = None
         attendance.notes = notes or attendance.notes
+        attendance.source = Attendance.Source.MANUAL
         attendance.save()
         AuditService.log(actor=user, action="attendance.break_ended", entity=attendance, after=attendance)
         return attendance

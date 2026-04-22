@@ -49,6 +49,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(source="user.first_name")
     last_name = serializers.CharField(source="user.last_name")
     role = serializers.ChoiceField(source="user.role", choices=User.Role.choices, required=False)
+    biometric_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     shift_template = serializers.PrimaryKeyRelatedField(
         queryset=ShiftTemplate.objects.filter(is_active=True),
         required=False,
@@ -70,6 +71,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "id",
             "user_id",
             "employee_id",
+            "biometric_id",
             "email",
             "first_name",
             "last_name",
@@ -129,6 +131,21 @@ class EmployeeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {field_name: "Select a manager, HR/Admin user, or a team lead as the reporting manager."}
             )
+
+    def validate_biometric_id(self, value):
+        if not value:
+            return None
+
+        value = value.strip()
+        if not value:
+            return None
+
+        queryset = Employee.objects.filter(biometric_id__iexact=value)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("This biometric ID is already mapped to another employee.")
+        return value
 
     def _get_requested_role(self, attrs):
         user_data = attrs.get("user", {})

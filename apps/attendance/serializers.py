@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.attendance.models import Attendance, AttendanceRegularization
+from apps.attendance.models import Attendance, AttendanceRegularization, BiometricAttendanceEvent, BiometricDevice
 
 
 class AttendanceSerializer(serializers.ModelSerializer):
@@ -32,10 +32,12 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "current_session_check_in",
             "break_started_at",
             "break_minutes",
+            "break_count",
             "current_session_break_minutes",
             "is_checked_in",
             "is_on_break",
             "status",
+            "source",
             "notes",
             "total_work_minutes",
             "total_work_hours",
@@ -62,9 +64,11 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "current_session_check_in",
             "break_started_at",
             "break_minutes",
+            "break_count",
             "current_session_break_minutes",
             "is_checked_in",
             "is_on_break",
+            "source",
             "total_work_minutes",
             "total_work_hours",
             "active_work_minutes",
@@ -112,6 +116,93 @@ class AttendanceSerializer(serializers.ModelSerializer):
         from apps.attendance.services.attendance_service import AttendanceService
 
         return AttendanceService.get_work_location(obj)
+
+
+class BiometricDeviceSerializer(serializers.ModelSerializer):
+    secret_key = serializers.CharField(write_only=True, required=False, allow_blank=False)
+
+    class Meta:
+        model = BiometricDevice
+        fields = (
+            "id",
+            "name",
+            "device_code",
+            "secret_key",
+            "location_name",
+            "is_active",
+            "last_seen_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "last_seen_at", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        if not self.instance and not attrs.get("secret_key"):
+            raise serializers.ValidationError({"secret_key": "Secret key is required when creating a biometric device."})
+        return attrs
+
+
+class BiometricAttendanceEventSerializer(serializers.ModelSerializer):
+    device_name = serializers.CharField(source="device.name", read_only=True)
+    device_code = serializers.CharField(source="device.device_code", read_only=True)
+    employee_name = serializers.SerializerMethodField()
+    employee_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BiometricAttendanceEvent
+        fields = (
+            "id",
+            "device",
+            "device_name",
+            "device_code",
+            "employee",
+            "employee_name",
+            "employee_code",
+            "attendance",
+            "device_user_id",
+            "external_event_id",
+            "event_type",
+            "occurred_at",
+            "status",
+            "message",
+            "processed_at",
+            "raw_payload",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_employee_name(self, obj):
+        return obj.employee.user.full_name if obj.employee_id and obj.employee else None
+
+    def get_employee_code(self, obj):
+        return obj.employee.employee_id if obj.employee_id and obj.employee else None
+
+
+class BiometricAttendanceIngestSerializer(serializers.Serializer):
+    device_code = serializers.CharField()
+    secret_key = serializers.CharField(write_only=True)
+    biometric_id = serializers.CharField()
+    event_type = serializers.CharField()
+    occurred_at = serializers.DateTimeField()
+    external_event_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    raw_payload = serializers.JSONField(required=False, default=dict)
+
+    def validate_biometric_id(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Biometric ID is required.")
+        return value
+
+    def validate_event_type(self, value):
+        from apps.attendance.services.biometric_service import BiometricAttendanceService
+
+        return BiometricAttendanceService.normalize_event_type(value)
+
+    def validate_external_event_id(self, value):
+        if not value:
+            return None
+        return value.strip() or None
 
 
 class AttendanceActionSerializer(serializers.Serializer):

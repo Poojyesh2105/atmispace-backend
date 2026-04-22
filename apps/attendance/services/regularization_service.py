@@ -110,6 +110,7 @@ class AttendanceRegularizationService:
             0,
         )
         attendance.status = Attendance.Status.PRESENT
+        attendance.source = Attendance.Source.REGULARIZATION
         attendance.notes = regularization.reason
         attendance.save()
 

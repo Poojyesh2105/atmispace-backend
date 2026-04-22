@@ -13,6 +13,7 @@ class DepartmentAdmin(admin.ModelAdmin):
 class EmployeeAdmin(admin.ModelAdmin):
     list_display = (
         "employee_id",
+        "biometric_id",
         "user",
         "designation",
         "department",
@@ -23,4 +24,4 @@ class EmployeeAdmin(admin.ModelAdmin):
         "hire_date",
     )
     list_filter = ("department", "department_role", "employment_type", "is_active")
-    search_fields = ("employee_id", "user__email", "user__first_name", "user__last_name")
+    search_fields = ("employee_id", "biometric_id", "user__email", "user__first_name", "user__last_name")

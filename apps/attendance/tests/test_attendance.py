@@ -9,8 +9,9 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import User
-from apps.attendance.models import Attendance, AttendanceRegularization
+from apps.attendance.models import Attendance, AttendanceRegularization, BiometricAttendanceEvent, BiometricDevice
 from apps.attendance.services.attendance_service import AttendanceService
+from apps.attendance.services.biometric_service import BiometricAttendanceService
 from apps.attendance.services.regularization_service import AttendanceRegularizationService
 from apps.employees.models import Department, Employee
 
@@ -29,10 +30,11 @@ def make_user(email, role=User.Role.EMPLOYEE, password="Test@1234"):
     )
 
 
-def make_employee(user, emp_id="EMP001", dept=None):
+def make_employee(user, emp_id="EMP001", dept=None, biometric_id=None):
     return Employee.objects.create(
         user=user,
         employee_id=emp_id,
+        biometric_id=biometric_id,
         designation="Dev",
         hire_date=date.today(),
         department=dept,
@@ -161,6 +163,7 @@ class BreakServiceTestCase(TestCase):
         AttendanceService.check_in(self.user)
         attendance = AttendanceService.start_break(self.user)
         self.assertIsNotNone(attendance.break_started_at)
+        self.assertEqual(attendance.break_count, 1)
 
     def test_start_break_without_checkin_raises(self):
         from rest_framework import exceptions
@@ -224,6 +227,80 @@ class BreakServiceTestCase(TestCase):
             attendance = AttendanceService.end_break(self.user)
 
         self.assertGreater(attendance.current_session_break_minutes, 0)
+
+
+# ---------------------------------------------------------------------------
+# Biometric attendance ingestion tests
+# ---------------------------------------------------------------------------
+
+class BiometricAttendanceServiceTestCase(TestCase):
+    def setUp(self):
+        self.dept = make_department("Bio Dept", "BIO")
+        self.user = make_user("bio-emp@example.com")
+        self.employee = make_employee(self.user, "BIO-001", self.dept, biometric_id="BIO1001")
+        self.device = BiometricDevice.objects.create(
+            name="Main Gate",
+            device_code="BIO-GATE-01",
+            secret_key="device-secret",
+            location_name="Office",
+        )
+
+    def _ingest(self, event_type, occurred_at, external_event_id, biometric_id="BIO1001"):
+        return BiometricAttendanceService.ingest_event(
+            {
+                "device_code": self.device.device_code,
+                "secret_key": self.device.secret_key,
+                "biometric_id": biometric_id,
+                "event_type": event_type,
+                "occurred_at": occurred_at,
+                "external_event_id": external_event_id,
+                "raw_payload": {"source": "test"},
+            }
+        )
+
+    def test_biometric_checkin_creates_attendance(self):
+        occurred_at = timezone.now().replace(microsecond=0)
+        event = self._ingest("CHECK_IN", occurred_at, "bio-ci-1")
+
+        self.assertEqual(event.status, BiometricAttendanceEvent.Status.PROCESSED)
+        self.assertEqual(event.employee, self.employee)
+        self.assertIsNotNone(event.attendance)
+        self.assertEqual(event.attendance.source, Attendance.Source.BIOMETRIC)
+        self.assertEqual(event.attendance.current_session_check_in, occurred_at)
+
+    def test_biometric_break_events_increment_count_and_minutes(self):
+        base_time = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0)
+        self._ingest("CHECK_IN", base_time, "bio-break-ci")
+        self._ingest("BREAK_START", base_time + timedelta(hours=2), "bio-break-start")
+        self._ingest("BREAK_END", base_time + timedelta(hours=2, minutes=30), "bio-break-end")
+        checkout_event = self._ingest("CHECK_OUT", base_time + timedelta(hours=8), "bio-break-co")
+
+        attendance = checkout_event.attendance
+        self.assertEqual(attendance.break_count, 1)
+        self.assertEqual(attendance.break_minutes, 30)
+        self.assertEqual(attendance.total_work_minutes, 450)
+        self.assertIsNone(attendance.current_session_check_in)
+
+    def test_duplicate_external_event_is_idempotent(self):
+        occurred_at = timezone.now().replace(microsecond=0)
+        first_event = self._ingest("CHECK_IN", occurred_at, "bio-dup")
+        second_event = self._ingest("CHECK_IN", occurred_at, "bio-dup")
+
+        self.assertEqual(first_event.pk, second_event.pk)
+        self.assertEqual(BiometricAttendanceEvent.objects.filter(external_event_id="bio-dup").count(), 1)
+        self.assertEqual(
+            Attendance.objects.filter(employee=self.employee, attendance_date=timezone.localtime(occurred_at).date()).count(),
+            1,
+        )
+
+    def test_unknown_biometric_id_records_failed_event(self):
+        occurred_at = timezone.now().replace(microsecond=0)
+        event = self._ingest("CHECK_IN", occurred_at, "bio-unknown", biometric_id="UNKNOWN")
+
+        self.assertEqual(event.status, BiometricAttendanceEvent.Status.FAILED)
+        self.assertIsNone(event.employee)
+        self.assertIsNone(event.attendance)
+        self.assertIn("No active employee", event.message)
 
 
 # ---------------------------------------------------------------------------

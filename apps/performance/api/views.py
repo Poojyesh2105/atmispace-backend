@@ -26,7 +26,7 @@ class RatingScaleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return PerformanceSelectors.get_rating_scale_queryset()
+        return PerformanceSelectors.get_rating_scale_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
@@ -54,7 +54,7 @@ class PerformanceCycleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return PerformanceSelectors.get_cycle_queryset()
+        return PerformanceSelectors.get_cycle_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
@@ -137,4 +137,3 @@ class PerformanceReviewViewSet(viewsets.ReadOnlyModelViewSet):
         serializer.is_valid(raise_exception=True)
         review = PerformanceReviewService.submit_hr_review(request.user, self.get_object(), serializer.validated_data)
         return success_response(data=self.get_serializer(review).data, message="Final review submitted.")
-

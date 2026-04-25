@@ -7,6 +7,7 @@ from django.utils.timezone import localtime
 from rest_framework import exceptions
 
 from apps.accounts.models import User
+from apps.core.services import OrganizationService
 from apps.payroll.models import EmployeeSalaryComponentTemplate, PayslipTemplate, SalaryComponent, SalaryComponentTemplate
 
 
@@ -470,19 +471,31 @@ class SalaryComponentService:
             code = data.pop("code")
             if code == "PF":
                 data["base_component"] = created_components.get("BASIC")
-            component = SalaryComponent.objects.create(template=default_template, code=code, **data)
+            component = SalaryComponent.objects.create(
+                organization=default_template.organization,
+                template=default_template,
+                code=code,
+                **data,
+            )
             created_components[code] = component
 
     @staticmethod
     @transaction.atomic
     def get_default_template():
-        default_template = SalaryComponentTemplate.objects.filter(is_default=True, is_active=True).first()
+        default_org = OrganizationService.get_default_organization()
+        default_template = (
+            SalaryComponentTemplate.objects.for_current_org(organization=default_org)
+            .filter(is_default=True, is_active=True)
+            .order_by("-organization_id", "name")
+            .first()
+        )
         if default_template:
             return default_template
 
         template, created = SalaryComponentTemplate.objects.get_or_create(
             name="Standard Salary Structure",
             defaults={
+                "organization": default_org,
                 "description": "Default salary component package used when no employee-specific package is assigned.",
                 "is_default": True,
                 "is_active": True,
@@ -530,6 +543,9 @@ class SalaryComponentService:
     def create_component(validated_data, actor):
         SalaryComponentService._check_manage_permission(actor)
         validated_data = SalaryComponentService._normalize_component_payload(validated_data)
+        organization = OrganizationService.resolve_for_actor(actor)
+        if organization:
+            validated_data.setdefault("organization", organization)
         component = SalaryComponent.objects.create(**validated_data)
         return component
 
@@ -553,6 +569,9 @@ class SalaryComponentService:
         SalaryComponentService._check_manage_permission(actor)
         is_default = validated_data.get("is_default", False) or not SalaryComponentTemplate.objects.exists()
         validated_data["is_default"] = is_default
+        organization = OrganizationService.resolve_for_actor(actor)
+        if organization:
+            validated_data.setdefault("organization", organization)
         if is_default:
             SalaryComponentTemplate.objects.filter(is_default=True).update(is_default=False)
         return SalaryComponentTemplate.objects.create(**validated_data)
@@ -594,6 +613,7 @@ class SalaryComponentService:
         assignment, _ = EmployeeSalaryComponentTemplate.objects.update_or_create(
             employee=employee,
             defaults={
+                "organization": employee.organization or getattr(actor, "organization", None),
                 "template": template,
                 "assigned_by": actor,
                 "notes": notes,
@@ -622,6 +642,9 @@ class PayslipTemplateService:
         PayslipTemplateService._check_manage_permission(actor)
         is_default = validated_data.get("is_default", False) or not PayslipTemplate.objects.exists()
         validated_data["is_default"] = is_default
+        organization = OrganizationService.resolve_for_actor(actor)
+        if organization:
+            validated_data.setdefault("organization", organization)
         if is_default:
             PayslipTemplate.objects.filter(is_default=True).update(is_default=False)
         template = PayslipTemplate.objects.create(**validated_data)
@@ -699,7 +722,8 @@ class PayslipTemplateService:
         if PayslipTemplate.objects.exists():
             return None
 
-        template = PayslipTemplate.objects.create(**DEFAULT_PAYSLIP_TEMPLATE_DATA)
+        default_org = OrganizationService.get_default_organization()
+        template = PayslipTemplate.objects.create(organization=default_org, **DEFAULT_PAYSLIP_TEMPLATE_DATA)
         return template
 
     @staticmethod
@@ -944,43 +968,322 @@ class PayslipTemplateService:
             return rendered
 
         if template is None:
-            # Built-in fallback template
+            # ── Built-in modern payslip template ──────────────────────────────
             show_breakdown = bool(entries)
-            breakdown_section = ""
-            if show_breakdown:
-                breakdown_section = f"""
-                <h3>Component Breakdown</h3>
-                <table border="1" cellpadding="5" cellspacing="0" style="width:100%;border-collapse:collapse">
-                  <thead>
-                    <tr><th>Component</th><th>Type</th><th>Amount</th></tr>
-                  </thead>
-                  <tbody>
-                    {component_rows_html}
-                  </tbody>
-                </table>
-                """
+
+            # Build split earning / deduction rows for the two-column table
+            split_rows_html = ""
+            if show_breakdown and split_row_count:
+                rows_markup = []
+                for idx in range(split_row_count):
+                    e_name, e_amt = earning_rows[idx] if idx < len(earning_rows) else ("", None)
+                    d_name, d_amt = deduction_rows[idx] if idx < len(deduction_rows) else ("", None)
+                    rows_markup.append(
+                        f"<tr>"
+                        f"<td class='comp-name'>{e_name}</td>"
+                        f"<td class='comp-amt'>{'&#8377;&nbsp;' + safe(money(e_amt)) if e_amt is not None else ''}</td>"
+                        f"<td class='comp-sep'></td>"
+                        f"<td class='comp-name'>{d_name}</td>"
+                        f"<td class='comp-amt'>{'&#8377;&nbsp;' + safe(money(d_amt)) if d_amt is not None else ''}</td>"
+                        f"</tr>"
+                    )
+                split_rows_html = "\n".join(rows_markup)
+
             html = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Payslip - {payroll_month_str}</title>
-<style>body{{font-family:Arial,sans-serif;padding:20px}} table{{width:100%}}</style>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Payslip &mdash; {safe(payroll_month_str)}</title>
+  <style>
+    /* ── Reset ── */
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+
+    /* ── Base ── */
+    body {{
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 10pt;
+      color: #1a2236;
+      background: #f4f6f9;
+      padding: 24px;
+    }}
+
+    /* ── Card wrapper ── */
+    .payslip-card {{
+      max-width: 760px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }}
+
+    /* ── Header band ── */
+    .header {{
+      background: linear-gradient(135deg, #0f3d52 0%, #1a6278 100%);
+      color: #fff;
+      padding: 28px 32px 22px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }}
+    .header-left {{ flex: 1; }}
+    .org-name {{
+      font-size: 18pt;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      margin-bottom: 4px;
+    }}
+    .org-address {{
+      font-size: 8.5pt;
+      opacity: 0.75;
+      line-height: 1.5;
+    }}
+    .header-right {{ text-align: right; flex-shrink: 0; }}
+    .doc-label {{
+      font-size: 8pt;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      opacity: 0.7;
+      margin-bottom: 4px;
+    }}
+    .payroll-month {{
+      font-size: 15pt;
+      font-weight: 700;
+    }}
+
+    /* ── Accent bar ── */
+    .accent-bar {{
+      height: 4px;
+      background: linear-gradient(90deg, #f4b740 0%, #f47c40 100%);
+    }}
+
+    /* ── Section ── */
+    .section {{ padding: 22px 32px; }}
+    .section + .section {{ border-top: 1px solid #edf0f5; }}
+    .section-title {{
+      font-size: 7.5pt;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: #6b7589;
+      margin-bottom: 14px;
+    }}
+
+    /* ── Employee summary grid ── */
+    .summary-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px 24px;
+    }}
+    .summary-item label {{
+      display: block;
+      font-size: 7.5pt;
+      font-weight: 600;
+      color: #8a94a8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 3px;
+    }}
+    .summary-item span {{
+      font-size: 9.5pt;
+      font-weight: 600;
+      color: #1a2236;
+    }}
+
+    /* ── Net pay highlight box ── */
+    .net-pay-box {{
+      background: #f0faf6;
+      border: 1.5px solid #b2e0cc;
+      border-radius: 10px;
+      padding: 18px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }}
+    .net-pay-label {{
+      font-size: 8pt;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #2d8c6a;
+      margin-bottom: 4px;
+    }}
+    .net-pay-amount {{
+      font-size: 22pt;
+      font-weight: 800;
+      color: #1a6252;
+      letter-spacing: -0.5px;
+    }}
+    .net-pay-words {{
+      font-size: 8pt;
+      color: #5a9e82;
+      font-style: italic;
+      margin-top: 4px;
+    }}
+    .net-pay-meta {{ text-align: right; flex-shrink: 0; }}
+    .meta-row {{
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-bottom: 4px;
+    }}
+    .meta-row label {{
+      font-size: 7.5pt;
+      color: #8a94a8;
+      font-weight: 600;
+    }}
+    .meta-row span {{
+      font-size: 8pt;
+      font-weight: 700;
+      color: #1a2236;
+    }}
+
+    /* ── Earnings & Deductions table ── */
+    .comp-table {{
+      width: 100%;
+      border-collapse: collapse;
+    }}
+    .comp-table thead tr {{
+      background: #f4f6f9;
+    }}
+    .comp-table thead th {{
+      font-size: 7.5pt;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #6b7589;
+      padding: 9px 12px;
+      text-align: left;
+    }}
+    .comp-table thead th.right {{ text-align: right; }}
+    .comp-table thead .col-sep {{ width: 1px; background: #dde2ec; padding: 0; }}
+    .comp-table tbody tr:nth-child(even) {{ background: #fafbfd; }}
+    .comp-table tbody tr:hover {{ background: #f0f4ff; }}
+    .comp-name {{
+      font-size: 9pt;
+      color: #2a3450;
+      padding: 8px 12px;
+    }}
+    .comp-amt {{
+      font-size: 9pt;
+      font-weight: 600;
+      color: #1a2236;
+      padding: 8px 12px;
+      text-align: right;
+      white-space: nowrap;
+    }}
+    .comp-sep {{ width: 1px; background: #dde2ec; padding: 0; }}
+
+    /* ── Total row ── */
+    .total-row {{
+      border-top: 2px solid #dde2ec;
+    }}
+    .total-row td {{
+      padding: 10px 12px;
+      font-weight: 700;
+      font-size: 9.5pt;
+      background: #f4f6f9;
+    }}
+
+    /* ── Footer ── */
+    .footer {{
+      padding: 16px 32px;
+      background: #f4f6f9;
+      border-top: 1px solid #edf0f5;
+      text-align: center;
+      font-size: 7.5pt;
+      color: #9ea8bb;
+    }}
+    .footer strong {{ color: #6b7589; }}
+
+    /* ── Generated stamp ── */
+    .generated-stamp {{
+      font-size: 7pt;
+      color: #b0b8cc;
+      text-align: right;
+      padding: 4px 32px 12px;
+    }}
+  </style>
 </head>
 <body>
-  <h1>Payslip</h1>
-  <hr>
-  <table>
-    <tr><td><strong>Employee Name:</strong></td><td>{safe(employee_name)}</td>
-        <td><strong>Employee ID:</strong></td><td>{safe(employee_id)}</td></tr>
-    <tr><td><strong>Designation:</strong></td><td>{safe(designation)}</td>
-        <td><strong>Payroll Month:</strong></td><td>{safe(payroll_month_str)}</td></tr>
-  </table>
-  <hr>
-  <table>
-    <tr><td><strong>Gross Salary:</strong></td><td>{safe(money(payslip.gross_monthly_salary))}</td></tr>
-    <tr><td><strong>Total Deductions:</strong></td><td>{safe(money(payslip.total_deductions))}</td></tr>
-    <tr><td><strong>LOP Days:</strong></td><td>{safe(payslip.lop_days)}</td></tr>
-    <tr><td><strong>Net Pay:</strong></td><td>{safe(money(payslip.net_pay))}</td></tr>
-  </table>
-  {breakdown_section}
+<div class="payslip-card">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <div class="org-name">{safe(organization_name)}</div>
+      <div class="org-address">{safe(organization_address)}</div>
+    </div>
+    <div class="header-right">
+      <div class="doc-label">Payslip</div>
+      <div class="payroll-month">{safe(payroll_month_str)}</div>
+    </div>
+  </div>
+  <div class="accent-bar"></div>
+
+  <!-- Employee Details -->
+  <div class="section">
+    <div class="section-title">Employee Information</div>
+    <div class="summary-grid">
+      <div class="summary-item">
+        <label>Employee Name</label>
+        <span>{safe(employee_name)}</span>
+      </div>
+      <div class="summary-item">
+        <label>Employee ID</label>
+        <span>{safe(employee_id)}</span>
+      </div>
+      <div class="summary-item">
+        <label>Designation</label>
+        <span>{safe(designation) or '&mdash;'}</span>
+      </div>
+      <div class="summary-item">
+        <label>Department</label>
+        <span>{safe(department_name) or '&mdash;'}</span>
+      </div>
+      <div class="summary-item">
+        <label>Pay Period</label>
+        <span>{safe(payroll_month_str)}</span>
+      </div>
+      <div class="summary-item">
+        <label>Pay Date</label>
+        <span>{safe(pay_date)}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Net Pay Summary -->
+  <div class="section">
+    <div class="section-title">Net Pay</div>
+    <div class="net-pay-box">
+      <div class="net-pay-left">
+        <div class="net-pay-label">Total Net Pay</div>
+        <div class="net-pay-amount">&#8377;&nbsp;{safe(money(payslip.net_pay))}</div>
+        <div class="net-pay-words">{safe(amount_to_words(payslip.net_pay))}</div>
+      </div>
+      <div class="net-pay-meta">
+        <div class="meta-row"><label>Paid Days</label><span>{safe(payslip.payable_days)}</span></div>
+        <div class="meta-row"><label>LOP Days</label><span>{safe(payslip.lop_days)}</span></div>
+        <div class="meta-row"><label>Days in Month</label><span>{safe(payslip.days_in_month)}</span></div>
+        <div class="meta-row"><label>Gross Earnings</label><span>&#8377;&nbsp;{safe(money(gross_earnings))}</span></div>
+        <div class="meta-row"><label>Total Deductions</label><span>&#8377;&nbsp;{safe(money(payslip.total_deductions))}</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Earnings & Deductions Breakdown -->
+  {'<div class="section"><div class="section-title">Earnings &amp; Deductions</div><table class="comp-table"><thead><tr><th>Earnings Component</th><th class="right">Amount (&#8377;)</th><th class="col-sep"></th><th>Deductions Component</th><th class="right">Amount (&#8377;)</th></tr></thead><tbody>' + split_rows_html + '</tbody><tfoot><tr class="total-row"><td class="comp-name">Total Earnings</td><td class="comp-amt">&#8377;&nbsp;' + safe(money(gross_earnings)) + '</td><td class="comp-sep"></td><td class="comp-name">Total Deductions</td><td class="comp-amt">&#8377;&nbsp;' + safe(money(payslip.total_deductions)) + '</td></tr></tfoot></table></div>' if show_breakdown and split_rows_html else ''}
+
+  <!-- Footer -->
+  <div class="footer">
+    {safe(footer_note) or 'This is a system-generated payslip and does not require a signature.'}
+  </div>
+  <div class="generated-stamp">Generated: {safe(generated_at)}</div>
+
+</div>
 </body>
 </html>"""
             return html

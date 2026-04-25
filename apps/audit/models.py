@@ -1,10 +1,10 @@
 from django.conf import settings
 from django.db import models
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 
 
-class AuditLog(TimestampedModel):
+class AuditLog(OrganizationScopedModel):
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -24,6 +24,7 @@ class AuditLog(TimestampedModel):
         indexes = [
             models.Index(fields=["entity_type", "entity_id"]),
             models.Index(fields=["action", "timestamp"]),
+            models.Index(fields=["organization", "timestamp"]),
         ]
 
     def __str__(self):

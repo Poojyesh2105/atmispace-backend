@@ -19,7 +19,7 @@ class WorkflowViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return WorkflowService.get_workflow_queryset()
+        return WorkflowService.get_workflow_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy", "attach"}:
@@ -32,6 +32,7 @@ class WorkflowViewSet(viewsets.ModelViewSet):
         workflow = WorkflowService.create_workflow(
             {key: value for key, value in serializer.validated_data.items() if key != "steps"},
             serializer.validated_data.get("steps", []),
+            actor=request.user,
         )
         return success_response(data=self.get_serializer(workflow).data, message="Workflow created successfully.", status_code=status.HTTP_201_CREATED)
 

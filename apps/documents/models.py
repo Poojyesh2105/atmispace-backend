@@ -1,11 +1,11 @@
 from django.conf import settings
 from django.db import models
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Department, Employee
 
 
-class DocumentType(TimestampedModel):
+class DocumentType(OrganizationScopedModel):
     name = models.CharField(max_length=120, unique=True)
     category = models.CharField(max_length=80, blank=True)
     description = models.TextField(blank=True)
@@ -20,7 +20,7 @@ class DocumentType(TimestampedModel):
         return self.name
 
 
-class MandatoryDocumentRule(TimestampedModel):
+class MandatoryDocumentRule(OrganizationScopedModel):
     name = models.CharField(max_length=160)
     document_type = models.ForeignKey(DocumentType, on_delete=models.CASCADE, related_name="mandatory_rules")
     department = models.ForeignKey(
@@ -38,13 +38,14 @@ class MandatoryDocumentRule(TimestampedModel):
         ordering = ["name"]
         indexes = [
             models.Index(fields=["document_type", "is_active"]),
+            models.Index(fields=["organization", "is_active"]),
         ]
 
     def __str__(self):
         return self.name
 
 
-class EmployeeDocument(TimestampedModel):
+class EmployeeDocument(OrganizationScopedModel):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         VERIFIED = "VERIFIED", "Verified"
@@ -74,8 +75,8 @@ class EmployeeDocument(TimestampedModel):
         indexes = [
             models.Index(fields=["employee", "status"]),
             models.Index(fields=["document_type", "status"]),
+            models.Index(fields=["organization", "status", "expiry_date"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.document_type.name}"
-

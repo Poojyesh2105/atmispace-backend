@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from apps.accounts.models import User
 from apps.employees.models import Department, Employee, OrganizationSettings, ShiftTemplate
+from apps.employees.selectors import EmployeeSelectors
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -64,6 +65,16 @@ class EmployeeSerializer(serializers.ModelSerializer):
     shift_template_name = serializers.CharField(source="shift_template.name", read_only=True)
     monthly_gross_salary = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     can_view_compensation = serializers.SerializerMethodField()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            self.fields["department"].queryset = Department.objects.for_current_org(user)
+            self.fields["manager"].queryset = EmployeeSelectors.get_queryset_for_user(user)
+            self.fields["secondary_manager"].queryset = EmployeeSelectors.get_queryset_for_user(user)
+            self.fields["shift_template"].queryset = ShiftTemplate.objects.for_current_org(user).filter(is_active=True)
 
     class Meta:
         model = Employee

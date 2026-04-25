@@ -1,11 +1,12 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Employee
 
 
-class PayrollCycle(TimestampedModel):
+class PayrollCycle(OrganizationScopedModel):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         LOCKED = "LOCKED", "Locked"
@@ -23,13 +24,14 @@ class PayrollCycle(TimestampedModel):
         ordering = ["-payroll_month", "name"]
         indexes = [
             models.Index(fields=["payroll_month", "status"]),
+            models.Index(fields=["organization", "payroll_month", "status"]),
         ]
 
     def __str__(self):
         return self.name
 
 
-class PayrollRun(TimestampedModel):
+class PayrollRun(OrganizationScopedModel):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         LOCKED = "LOCKED", "Locked"
@@ -61,13 +63,14 @@ class PayrollRun(TimestampedModel):
         ordering = ["-cycle__payroll_month"]
         indexes = [
             models.Index(fields=["status"]),
+            models.Index(fields=["organization", "status"]),
         ]
 
     def __str__(self):
         return f"{self.cycle.name} - {self.status}"
 
 
-class PayrollAdjustment(TimestampedModel):
+class PayrollAdjustment(OrganizationScopedModel):
     class AdjustmentType(models.TextChoices):
         EARNING = "EARNING", "Earning"
         DEDUCTION = "DEDUCTION", "Deduction"
@@ -95,13 +98,17 @@ class PayrollAdjustment(TimestampedModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["cycle", "employee", "status"]),
+            models.Index(fields=["organization", "status", "cycle"]),
+        ]
+        constraints = [
+            models.CheckConstraint(check=Q(amount__gte=0), name="payroll_adjustment_amount_non_negative"),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.adjustment_type}"
 
 
-class SalaryRevision(TimestampedModel):
+class SalaryRevision(OrganizationScopedModel):
     class Status(models.TextChoices):
         APPLIED = "APPLIED", "Applied"
         SCHEDULED = "SCHEDULED", "Scheduled"
@@ -124,13 +131,18 @@ class SalaryRevision(TimestampedModel):
         ordering = ["-effective_date", "-created_at"]
         indexes = [
             models.Index(fields=["employee", "effective_date"]),
+            models.Index(fields=["organization", "effective_date"]),
+        ]
+        constraints = [
+            models.CheckConstraint(check=Q(previous_ctc__gte=0), name="salary_revision_previous_ctc_non_negative"),
+            models.CheckConstraint(check=Q(new_ctc__gt=0), name="salary_revision_new_ctc_positive"),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.effective_date.isoformat()}"
 
 
-class Payslip(TimestampedModel):
+class Payslip(OrganizationScopedModel):
     payroll_cycle = models.ForeignKey(
         PayrollCycle,
         on_delete=models.SET_NULL,
@@ -177,13 +189,14 @@ class Payslip(TimestampedModel):
             models.Index(fields=["payroll_month"]),
             models.Index(fields=["employee", "payroll_month"]),
             models.Index(fields=["payroll_cycle", "employee"]),
+            models.Index(fields=["organization", "payroll_month"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.payroll_month.isoformat()}"
 
 
-class SalaryComponentTemplate(TimestampedModel):
+class SalaryComponentTemplate(OrganizationScopedModel):
     name = models.CharField(max_length=140, unique=True)
     description = models.TextField(blank=True)
     is_default = models.BooleanField(default=False)
@@ -196,7 +209,7 @@ class SalaryComponentTemplate(TimestampedModel):
         return self.name
 
 
-class EmployeeSalaryComponentTemplate(TimestampedModel):
+class EmployeeSalaryComponentTemplate(OrganizationScopedModel):
     employee = models.OneToOneField(
         Employee,
         on_delete=models.CASCADE,
@@ -223,7 +236,7 @@ class EmployeeSalaryComponentTemplate(TimestampedModel):
         return f"{self.employee.employee_id} - {self.template.name}"
 
 
-class SalaryComponent(TimestampedModel):
+class SalaryComponent(OrganizationScopedModel):
     class ComponentType(models.TextChoices):
         EARNING = "EARNING", "Earning"
         DEDUCTION = "DEDUCTION", "Deduction"
@@ -277,7 +290,7 @@ class SalaryComponent(TimestampedModel):
         return f"{self.template.name} - {self.name} ({self.code})"
 
 
-class PayslipComponentEntry(TimestampedModel):
+class PayslipComponentEntry(OrganizationScopedModel):
     payslip = models.ForeignKey(Payslip, on_delete=models.CASCADE, related_name="component_entries")
     component = models.ForeignKey(SalaryComponent, on_delete=models.SET_NULL, null=True, blank=True, related_name="payslip_entries")
     component_name = models.CharField(max_length=140)   # snapshot
@@ -295,7 +308,7 @@ class PayslipComponentEntry(TimestampedModel):
         return f"{self.payslip} - {self.component_name}"
 
 
-class PayslipTemplate(TimestampedModel):
+class PayslipTemplate(OrganizationScopedModel):
     name = models.CharField(max_length=140, unique=True)
     description = models.TextField(blank=True)
     is_default = models.BooleanField(default=False)

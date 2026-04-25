@@ -1,11 +1,11 @@
 from django.db import models
 
 from apps.accounts.models import User
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Department, Employee, ShiftTemplate
 
 
-class ShiftRotationRule(TimestampedModel):
+class ShiftRotationRule(OrganizationScopedModel):
     class HolidayStrategy(models.TextChoices):
         SKIP = "SKIP", "Skip"
         MARK_CONFLICT = "MARK_CONFLICT", "Mark Conflict"
@@ -31,7 +31,7 @@ class ShiftRotationRule(TimestampedModel):
         return self.name
 
 
-class ShiftRosterEntry(TimestampedModel):
+class ShiftRosterEntry(OrganizationScopedModel):
     class Source(models.TextChoices):
         MANUAL = "MANUAL", "Manual"
         BULK = "BULK", "Bulk"
@@ -52,13 +52,14 @@ class ShiftRosterEntry(TimestampedModel):
         ]
         indexes = [
             models.Index(fields=["roster_date", "is_conflicted"]),
+            models.Index(fields=["organization", "roster_date", "is_conflicted"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.roster_date.isoformat()}"
 
 
-class ScheduleConflict(TimestampedModel):
+class ScheduleConflict(OrganizationScopedModel):
     class ConflictType(models.TextChoices):
         HOLIDAY = "HOLIDAY", "Holiday"
         DUPLICATE = "DUPLICATE", "Duplicate"
@@ -81,8 +82,8 @@ class ScheduleConflict(TimestampedModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["conflict_type", "is_resolved"]),
+            models.Index(fields=["organization", "conflict_type", "is_resolved"]),
         ]
 
     def __str__(self):
         return f"{self.roster_entry_id} - {self.conflict_type}"
-

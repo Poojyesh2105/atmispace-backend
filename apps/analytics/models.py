@@ -1,9 +1,9 @@
 from django.db import models
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 
 
-class AnalyticsSnapshot(TimestampedModel):
+class AnalyticsSnapshot(OrganizationScopedModel):
     class MetricKey(models.TextChoices):
         HEADCOUNT = "HEADCOUNT", "Headcount"
         ATTRITION = "ATTRITION", "Attrition"
@@ -20,13 +20,16 @@ class AnalyticsSnapshot(TimestampedModel):
     class Meta:
         ordering = ["-snapshot_date", "metric_key"]
         constraints = [
-            models.UniqueConstraint(fields=["snapshot_date", "metric_key", "role_scope"], name="unique_analytics_snapshot_scope")
+            models.UniqueConstraint(
+                fields=["organization", "snapshot_date", "metric_key", "role_scope"],
+                name="unique_analytics_snapshot_scope",
+            )
         ]
         indexes = [
             models.Index(fields=["metric_key", "snapshot_date"]),
+            models.Index(fields=["organization", "metric_key", "snapshot_date"]),
         ]
 
     def __str__(self):
         scope = self.role_scope or "GLOBAL"
         return f"{self.metric_key} - {scope} - {self.snapshot_date.isoformat()}"
-

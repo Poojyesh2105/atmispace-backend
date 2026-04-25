@@ -6,12 +6,12 @@ from apps.scheduling.models import ScheduleConflict, ShiftRosterEntry, ShiftRota
 
 class SchedulingSelectors:
     @staticmethod
-    def get_rotation_rule_queryset():
-        return ShiftRotationRule.objects.select_related("department").all()
+    def get_rotation_rule_queryset(user=None):
+        return ShiftRotationRule.objects.for_current_org(user).select_related("department")
 
     @staticmethod
     def get_roster_queryset_for_user(user):
-        queryset = ShiftRosterEntry.objects.select_related("employee__user", "employee__manager", "shift_template")
+        queryset = ShiftRosterEntry.objects.for_current_org(user).select_related("employee__user", "employee__manager", "shift_template")
         employee = getattr(user, "employee_profile", None)
         if user.role in {User.Role.MANAGER, User.Role.HR, User.Role.ADMIN}:
             if user.role == User.Role.MANAGER and employee:
@@ -23,7 +23,7 @@ class SchedulingSelectors:
 
     @staticmethod
     def get_conflict_queryset_for_user(user):
-        queryset = ScheduleConflict.objects.select_related("roster_entry__employee__user", "reported_by")
+        queryset = ScheduleConflict.objects.for_current_org(user).select_related("roster_entry__employee__user", "reported_by")
         employee = getattr(user, "employee_profile", None)
         if user.role in {User.Role.MANAGER, User.Role.HR, User.Role.ADMIN}:
             if user.role == User.Role.MANAGER and employee:
@@ -36,4 +36,3 @@ class SchedulingSelectors:
         if employee:
             return queryset.filter(roster_entry__employee=employee)
         return queryset.none()
-

@@ -1,11 +1,15 @@
 from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
 from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.employees.models import Department, Employee, OrganizationSettings, ShiftTemplate
+from apps.employees.selectors import EmployeeSelectors
 
 
 class EmployeeService:
@@ -25,20 +29,7 @@ class EmployeeService:
 
     @staticmethod
     def get_employee_queryset_for_user(user):
-        queryset = Employee.objects.select_related(
-            "user",
-            "department",
-            "manager__user",
-            "secondary_manager__user",
-            "shift_template",
-        )
-        employee = getattr(user, "employee_profile", None)
-
-        if user.role in {User.Role.MANAGER, User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN}:
-            return queryset
-        if employee:
-            return queryset.filter(pk=employee.pk)
-        return queryset.none()
+        return EmployeeSelectors.get_queryset_for_user(user)
 
     @staticmethod
     def _validate_manage_access(actor, instance: Employee):
@@ -49,13 +40,14 @@ class EmployeeService:
 
     @staticmethod
     @transaction.atomic
-    def create_employee(validated_data):
+    def create_employee(validated_data, actor=None):
         from apps.leave_management.models import LeaveBalance
         from apps.leave_management.services.leave_service import LeavePolicyService
 
         user_data = validated_data.pop("user")
         password = validated_data.pop("password", None)
         force_password_reset = validated_data.pop("force_password_reset", False)
+        organization = OrganizationService.resolve_for_actor(actor)
         user = User.objects.create_user(
             email=user_data["email"],
             password=password or "ChangeMe123!",
@@ -63,9 +55,14 @@ class EmployeeService:
             last_name=user_data["last_name"],
             role=user_data.get("role", User.Role.EMPLOYEE),
         )
+        if organization:
+            user.organization = organization
+            user.save(update_fields=["organization", "updated_at"])
         if force_password_reset:
             user.force_password_reset = True
             user.save(update_fields=["force_password_reset"])
+        if organization:
+            validated_data["organization"] = organization
         employee = Employee.objects.create(user=user, **validated_data)
         policy = LeavePolicyService.get_policy()
         default_allocations = {
@@ -80,12 +77,12 @@ class EmployeeService:
                 leave_type=leave_type,
                 defaults={"allocated_days": default_allocations.get(leave_type, 0), "used_days": 0},
             )
-        AuditService.log(actor=user, action="employee.created", entity=employee, after=EmployeeService._snapshot_employee(employee))
+        AuditService.log(actor=actor or user, action="employee.created", entity=employee, after=EmployeeService._snapshot_employee(employee))
         return employee
 
     @staticmethod
     @transaction.atomic
-    def update_employee(instance: Employee, validated_data):
+    def update_employee(instance: Employee, validated_data, actor=None):
         before = EmployeeService._snapshot_employee(instance)
         user_data = validated_data.pop("user", {})
         password = validated_data.pop("password", None)
@@ -99,7 +96,13 @@ class EmployeeService:
         if password:
             instance.user.set_password(password)
         instance.user.save()
-        AuditService.log(actor=instance.user, action="employee.updated", entity=instance, before=before, after=EmployeeService._snapshot_employee(instance))
+        AuditService.log(
+            actor=actor or instance.user,
+            action="employee.updated",
+            entity=instance,
+            before=before,
+            after=EmployeeService._snapshot_employee(instance),
+        )
         return instance
 
     @staticmethod
@@ -148,11 +151,14 @@ class EmployeeService:
 
 class DepartmentService:
     @staticmethod
-    def get_queryset():
-        return Department.objects.all().prefetch_related("employees")
+    def get_queryset(actor=None):
+        return EmployeeSelectors.get_department_queryset(actor)
 
     @staticmethod
-    def create_department(validated_data):
+    def create_department(validated_data, actor=None):
+        organization = OrganizationService.resolve_for_actor(actor)
+        if organization:
+            validated_data.setdefault("organization", organization)
         return Department.objects.create(**validated_data)
 
     @staticmethod
@@ -164,27 +170,53 @@ class DepartmentService:
 
 
 class OrganizationSettingsService:
-    @staticmethod
-    def get_settings():
-        settings, _ = OrganizationSettings.objects.get_or_create(pk=1, defaults={"organization_name": "Organization"})
-        return settings
+    CACHE_KEY_TEMPLATE = "organization-settings:{organization_id}"
 
     @staticmethod
-    def update_settings(validated_data):
-        settings = OrganizationSettingsService.get_settings()
+    def _cache_key(organization_id):
+        return OrganizationSettingsService.CACHE_KEY_TEMPLATE.format(organization_id=organization_id or "global")
+
+    @staticmethod
+    def get_settings(actor=None, organization=None):
+        resolved_organization = OrganizationService.resolve_for_actor(actor, organization=organization)
+        cache_key = OrganizationSettingsService._cache_key(getattr(resolved_organization, "pk", None))
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        queryset = EmployeeSelectors.get_settings_queryset(actor)
+        if resolved_organization:
+            settings_instance, _ = queryset.get_or_create(
+                organization=resolved_organization,
+                defaults={"organization_name": resolved_organization.name},
+            )
+        else:
+            settings_instance, _ = queryset.get_or_create(pk=1, defaults={"organization_name": "Organization"})
+        cache.set(cache_key, settings_instance, timeout=settings.ORG_SETTINGS_CACHE_TTL_SECONDS)
+        return settings_instance
+
+    @staticmethod
+    def update_settings(validated_data, actor=None, organization=None):
+        settings_instance = OrganizationSettingsService.get_settings(actor=actor, organization=organization)
         for attr, value in validated_data.items():
-            setattr(settings, attr, value)
-        settings.save()
-        return settings
+            setattr(settings_instance, attr, value)
+        if resolved_organization := OrganizationService.resolve_for_actor(actor, organization=organization):
+            settings_instance.organization = resolved_organization
+        settings_instance.save()
+        cache.delete(OrganizationSettingsService._cache_key(getattr(settings_instance.organization, "pk", None)))
+        return settings_instance
 
 
 class ShiftTemplateService:
     @staticmethod
-    def get_queryset():
-        return ShiftTemplate.objects.all()
+    def get_queryset(actor=None):
+        return EmployeeSelectors.get_shift_queryset(actor)
 
     @staticmethod
-    def create_shift(validated_data):
+    def create_shift(validated_data, actor=None):
+        organization = OrganizationService.resolve_for_actor(actor)
+        if organization:
+            validated_data.setdefault("organization", organization)
         return ShiftTemplate.objects.create(**validated_data)
 
     @staticmethod

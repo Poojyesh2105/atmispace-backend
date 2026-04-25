@@ -1,11 +1,10 @@
-import pdb
-
-from django.db.models import Q
+from django.http import HttpResponse
 from rest_framework import decorators, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
 from apps.attendance.models import BiometricAttendanceEvent, BiometricDevice
+from apps.attendance.selectors import AttendanceSelectors
 from apps.attendance.serializers import (
     AttendanceActionSerializer,
     AttendanceRegularizationApplySerializer,
@@ -21,6 +20,7 @@ from apps.attendance.services.biometric_service import BiometricAttendanceServic
 from apps.attendance.services.regularization_service import AttendanceRegularizationService
 from apps.core.permissions import IsAdminOrHR, IsManagerOrAbove
 from apps.core.responses import success_response
+from apps.core.services import OrganizationService
 
 
 class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
@@ -85,12 +85,12 @@ class BiometricDeviceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsAdminOrHR]
 
     def get_queryset(self):
-        return BiometricDevice.objects.all()
+        return AttendanceSelectors.get_biometric_device_queryset(self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        device = serializer.save()
+        device = serializer.save(organization=OrganizationService.resolve_for_actor(request.user))
         return success_response(
             data=self.get_serializer(device).data,
             message="Biometric device added successfully.",
@@ -117,15 +117,7 @@ class BiometricAttendanceEventViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        queryset = BiometricAttendanceEvent.objects.select_related("device", "employee__user", "attendance").all()
-        employee = getattr(self.request.user, "employee_profile", None)
-        if self.request.user.role in {"HR", "ACCOUNTS", "ADMIN"}:
-            return queryset
-        if self.request.user.role == "MANAGER" and employee:
-            return queryset.filter(Q(employee=employee) | Q(employee__manager=employee) | Q(employee__secondary_manager=employee))
-        if employee:
-            return queryset.filter(employee=employee)
-        return queryset.none()
+        return AttendanceSelectors.get_biometric_event_queryset_for_user(self.request.user)
 
     def retrieve(self, request, *args, **kwargs):
         return success_response(data=self.get_serializer(self.get_object()).data)
@@ -144,6 +136,30 @@ class BiometricIngestView(APIView):
             status_code=status.HTTP_202_ACCEPTED,
         )
 
+class BioMaxBridgeIngestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if request.headers.get('X-BioMax-Bridge') != '1':
+            return HttpResponse(status=403)
+
+        data = request.data
+        try:
+            event, created = BiometricAttendanceService.ingest_event_idempotent({
+                "device_id": data.get("device_id", "BIOMAX"),
+                "employee_code": str(data.get("employee_code", "")),
+                "punch_time": data.get("punch_time"),
+                "punch_type": data.get("punch_type", "AUTO"),
+                "verify_mode": data.get("verify_mode", "UNKNOWN"),
+                "raw_payload": data.get("raw_payload", {}),
+            })
+            return success_response(
+                data={"event_id": event.id, "created": created},
+                message="Punch received.",
+            )
+        except Exception as e:
+            return success_response(data={}, message=str(e))
+        
 
 class AttendanceRegularizationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AttendanceRegularizationSerializer

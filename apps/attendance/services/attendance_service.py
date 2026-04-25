@@ -2,14 +2,15 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.attendance.models import Attendance
+from apps.attendance.selectors import AttendanceSelectors
 from apps.attendance.services.geo_utils import GeoUtils
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.employees.services.employee_service import OrganizationSettingsService
 
 
@@ -59,16 +60,7 @@ class AttendanceService:
 
     @staticmethod
     def get_queryset_for_user(user):
-        queryset = Attendance.objects.select_related("employee__user", "employee__department").all()
-        employee = getattr(user, "employee_profile", None)
-
-        if user.role in {User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN}:
-            return queryset
-        if user.role == User.Role.MANAGER and employee:
-            return queryset.filter(Q(employee=employee) | Q(employee__manager=employee) | Q(employee__secondary_manager=employee))
-        if employee:
-            return queryset.filter(employee=employee)
-        return queryset.none()
+        return AttendanceSelectors.get_attendance_queryset_for_user(user)
 
     @staticmethod
     def get_check_in_distance_meters(attendance):
@@ -144,6 +136,7 @@ class AttendanceService:
             employee=employee,
             attendance_date=today,
             defaults={
+                "organization": OrganizationService.resolve_for_actor(user),
                 "status": resolved_status,
                 "source": Attendance.Source.MANUAL,
                 "notes": notes,

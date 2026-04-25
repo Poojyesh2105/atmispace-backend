@@ -1,6 +1,5 @@
 from rest_framework import decorators, status, viewsets
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.permissions import IsAdminOrHR, IsManagerOrAbove
@@ -117,7 +116,7 @@ class LeaveRequestViewSet(viewsets.ReadOnlyModelViewSet):
             many=True,
             context=self._get_serializer_context_with_workflow(leave_requests=queryset),
         )
-        return Response(serializer.data)
+        return success_response(data=serializer.data)
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -196,18 +195,18 @@ class LeavePolicyView(APIView):
         return super().get_permissions()
 
     def get(self, request):
-        return success_response(data=LeavePolicySerializer(LeavePolicyService.get_policy()).data)
+        return success_response(data=LeavePolicySerializer(LeavePolicyService.get_policy(actor=request.user)).data)
 
     def put(self, request):
-        serializer = LeavePolicySerializer(LeavePolicyService.get_policy(), data=request.data)
+        serializer = LeavePolicySerializer(LeavePolicyService.get_policy(actor=request.user), data=request.data)
         serializer.is_valid(raise_exception=True)
-        policy = LeavePolicyService.update_policy(serializer.validated_data)
+        policy = LeavePolicyService.update_policy(serializer.validated_data, actor=request.user)
         return success_response(data=LeavePolicySerializer(policy).data, message="Leave policy updated successfully.")
 
     def patch(self, request):
-        serializer = LeavePolicySerializer(LeavePolicyService.get_policy(), data=request.data, partial=True)
+        serializer = LeavePolicySerializer(LeavePolicyService.get_policy(actor=request.user), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        policy = LeavePolicyService.update_policy(serializer.validated_data)
+        policy = LeavePolicyService.update_policy(serializer.validated_data, actor=request.user)
         return success_response(data=LeavePolicySerializer(policy).data, message="Leave policy updated successfully.")
 
 

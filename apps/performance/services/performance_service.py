@@ -4,6 +4,7 @@ from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.notifications.services.notification_service import NotificationService
 from apps.performance.models import PerformanceCycle, PerformanceGoal, PerformanceReview, RatingScale
 from apps.workflow.models import Workflow
@@ -13,6 +14,8 @@ from apps.workflow.services.workflow_service import WorkflowService
 class RatingScaleService:
     @staticmethod
     def create_scale(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         scale = RatingScale.objects.create(**validated_data)
         AuditService.log(actor=actor, action="performance.rating_scale.created", entity=scale, after=scale)
         return scale
@@ -30,6 +33,8 @@ class RatingScaleService:
 class PerformanceCycleService:
     @staticmethod
     def create_cycle(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         cycle = PerformanceCycle.objects.create(**validated_data)
         AuditService.log(actor=actor, action="performance.cycle.created", entity=cycle, after=cycle)
         return cycle
@@ -61,6 +66,7 @@ class PerformanceGoalService:
         employee = validated_data["employee"]
         if not PerformanceGoalService._can_manage_goal(actor, employee):
             raise exceptions.PermissionDenied("You cannot create goals for this employee.")
+        validated_data.setdefault("organization", employee.organization or OrganizationService.resolve_for_actor(actor))
         goal = PerformanceGoal.objects.create(**validated_data)
         AuditService.log(actor=actor, action="performance.goal.created", entity=goal, after=goal)
         return goal
@@ -83,7 +89,10 @@ class PerformanceReviewService:
         review, _ = PerformanceReview.objects.get_or_create(
             cycle=cycle,
             employee=employee,
-            defaults={"manager": employee.manager},
+            defaults={
+                "organization": employee.organization or getattr(cycle, "organization", None),
+                "manager": employee.manager,
+            },
         )
         return review
 
@@ -202,4 +211,3 @@ class PerformanceReviewService:
             f"Your performance review for {review.cycle.name} was returned for rework. {approver_note}".strip(),
         )
         AuditService.log(actor=actor, action="performance.review.rejected", entity=review, before=before, after=review)
-

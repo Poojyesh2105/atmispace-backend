@@ -23,7 +23,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return DepartmentService.get_queryset()
+        return DepartmentService.get_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
@@ -33,7 +33,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        department = DepartmentService.create_department(serializer.validated_data)
+        department = DepartmentService.create_department(serializer.validated_data, actor=request.user)
         return success_response(
             data=self.get_serializer(department).data,
             message="Department created successfully.",
@@ -66,19 +66,19 @@ class OrganizationSettingsView(APIView):
         return super().get_permissions()
 
     def get(self, request):
-        settings = OrganizationSettingsService.get_settings()
+        settings = OrganizationSettingsService.get_settings(actor=request.user)
         return success_response(data=OrganizationSettingsSerializer(settings).data)
 
     def put(self, request):
-        serializer = OrganizationSettingsSerializer(OrganizationSettingsService.get_settings(), data=request.data)
+        serializer = OrganizationSettingsSerializer(OrganizationSettingsService.get_settings(actor=request.user), data=request.data)
         serializer.is_valid(raise_exception=True)
-        settings = OrganizationSettingsService.update_settings(serializer.validated_data)
+        settings = OrganizationSettingsService.update_settings(serializer.validated_data, actor=request.user)
         return success_response(data=OrganizationSettingsSerializer(settings).data, message="Organization settings updated successfully.")
 
     def patch(self, request):
-        serializer = OrganizationSettingsSerializer(OrganizationSettingsService.get_settings(), data=request.data, partial=True)
+        serializer = OrganizationSettingsSerializer(OrganizationSettingsService.get_settings(actor=request.user), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        settings = OrganizationSettingsService.update_settings(serializer.validated_data)
+        settings = OrganizationSettingsService.update_settings(serializer.validated_data, actor=request.user)
         return success_response(data=OrganizationSettingsSerializer(settings).data, message="Organization settings updated successfully.")
 
 
@@ -87,7 +87,7 @@ class ShiftTemplateViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return ShiftTemplateService.get_queryset()
+        return ShiftTemplateService.get_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
@@ -97,7 +97,7 @@ class ShiftTemplateViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        shift = ShiftTemplateService.create_shift(serializer.validated_data)
+        shift = ShiftTemplateService.create_shift(serializer.validated_data, actor=request.user)
         return success_response(
             data=self.get_serializer(shift).data,
             message="Shift template created successfully.",
@@ -134,7 +134,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        employee = EmployeeService.create_employee(serializer.validated_data)
+        employee = EmployeeService.create_employee(serializer.validated_data, actor=request.user)
         return success_response(
             data=self.get_serializer(employee).data,
             message="Employee created successfully.",
@@ -149,7 +149,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         employee = self.get_object()
         serializer = self.get_serializer(employee, data=request.data, partial=kwargs.get("partial", False))
         serializer.is_valid(raise_exception=True)
-        updated_employee = EmployeeService.update_employee(employee, serializer.validated_data)
+        updated_employee = EmployeeService.update_employee(employee, serializer.validated_data, actor=request.user)
         return success_response(data=self.get_serializer(updated_employee).data, message="Employee updated successfully.")
 
     def destroy(self, request, *args, **kwargs):

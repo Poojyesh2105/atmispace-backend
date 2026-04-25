@@ -2,11 +2,11 @@ from django.conf import settings
 from django.db import models
 
 from apps.accounts.models import User
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Department, Employee
 
 
-class OnboardingPlan(TimestampedModel):
+class OnboardingPlan(OrganizationScopedModel):
     name = models.CharField(max_length=160, unique=True)
     description = models.TextField(blank=True)
     department = models.ForeignKey(
@@ -27,7 +27,7 @@ class OnboardingPlan(TimestampedModel):
         return self.name
 
 
-class OnboardingTaskTemplate(TimestampedModel):
+class OnboardingTaskTemplate(OrganizationScopedModel):
     class TaskType(models.TextChoices):
         DOCUMENT = "DOCUMENT", "Document"
         POLICY = "POLICY", "Policy"
@@ -53,7 +53,7 @@ class OnboardingTaskTemplate(TimestampedModel):
         return f"{self.plan.name} - {self.title}"
 
 
-class EmployeeOnboarding(TimestampedModel):
+class EmployeeOnboarding(OrganizationScopedModel):
     class Status(models.TextChoices):
         NOT_STARTED = "NOT_STARTED", "Not Started"
         IN_PROGRESS = "IN_PROGRESS", "In Progress"
@@ -77,13 +77,14 @@ class EmployeeOnboarding(TimestampedModel):
         ordering = ["-start_date", "employee__employee_id"]
         indexes = [
             models.Index(fields=["employee", "status"]),
+            models.Index(fields=["organization", "status", "start_date"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.status}"
 
 
-class EmployeeOnboardingTask(TimestampedModel):
+class EmployeeOnboardingTask(OrganizationScopedModel):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         IN_PROGRESS = "IN_PROGRESS", "In Progress"
@@ -119,13 +120,14 @@ class EmployeeOnboardingTask(TimestampedModel):
         ordering = ["onboarding", "sequence", "id"]
         indexes = [
             models.Index(fields=["onboarding", "status"]),
+            models.Index(fields=["organization", "status", "due_date"]),
         ]
 
     def __str__(self):
         return f"{self.onboarding.employee.employee_id} - {self.title}"
 
 
-class OffboardingCase(TimestampedModel):
+class OffboardingCase(OrganizationScopedModel):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         PENDING_APPROVAL = "PENDING_APPROVAL", "Pending Approval"
@@ -172,13 +174,14 @@ class OffboardingCase(TimestampedModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["employee", "status"]),
+            models.Index(fields=["organization", "status", "created_at"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.status}"
 
 
-class OffboardingTask(TimestampedModel):
+class OffboardingTask(OrganizationScopedModel):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         IN_PROGRESS = "IN_PROGRESS", "In Progress"
@@ -204,13 +207,14 @@ class OffboardingTask(TimestampedModel):
         ordering = ["offboarding_case", "sequence", "id"]
         indexes = [
             models.Index(fields=["offboarding_case", "status"]),
+            models.Index(fields=["organization", "status", "due_date"]),
         ]
 
     def __str__(self):
         return f"{self.offboarding_case.employee.employee_id} - {self.title}"
 
 
-class EmployeeChangeRequest(TimestampedModel):
+class EmployeeChangeRequest(OrganizationScopedModel):
     class ChangeType(models.TextChoices):
         CONFIRMATION = "CONFIRMATION", "Probation Confirmation"
         PROMOTION = "PROMOTION", "Promotion"
@@ -252,8 +256,8 @@ class EmployeeChangeRequest(TimestampedModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["employee", "change_type", "status"]),
+            models.Index(fields=["organization", "status", "change_type"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.change_type}"
-

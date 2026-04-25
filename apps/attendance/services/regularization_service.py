@@ -1,11 +1,12 @@
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 from rest_framework import exceptions
 
 from apps.attendance.models import Attendance, AttendanceRegularization
+from apps.attendance.selectors import AttendanceSelectors
 from apps.audit.services.audit_service import AuditService
 from apps.notifications.services.notification_service import NotificationService
+from apps.core.services import OrganizationService
 from apps.workflow.models import ApprovalInstance, Workflow
 from apps.workflow.services.workflow_service import WorkflowService
 
@@ -13,16 +14,7 @@ from apps.workflow.services.workflow_service import WorkflowService
 class AttendanceRegularizationService:
     @staticmethod
     def get_queryset_for_user(user):
-        queryset = AttendanceRegularization.objects.select_related("employee__user", "approver").all()
-        employee = getattr(user, "employee_profile", None)
-
-        if user.role in {"HR", "ADMIN"}:
-            return queryset
-        if user.role == "MANAGER" and employee:
-            return queryset.filter(Q(employee=employee) | Q(employee__manager=employee) | Q(employee__secondary_manager=employee))
-        if employee:
-            return queryset.filter(employee=employee)
-        return queryset.none()
+        return AttendanceSelectors.get_regularization_queryset_for_user(user)
 
     @staticmethod
     @transaction.atomic
@@ -39,7 +31,11 @@ class AttendanceRegularizationService:
         if existing_pending:
             raise exceptions.ValidationError({"date": "A pending attendance regularization request already exists for this date."})
 
-        regularization = AttendanceRegularization.objects.create(employee=employee, **validated_data)
+        regularization = AttendanceRegularization.objects.create(
+            employee=employee,
+            organization=OrganizationService.resolve_for_actor(user),
+            **validated_data,
+        )
         assignment = WorkflowService.start_workflow(
             Workflow.Module.ATTENDANCE_REGULARIZATION,
             regularization,
@@ -95,7 +91,10 @@ class AttendanceRegularizationService:
         attendance, _ = Attendance.objects.select_for_update().get_or_create(
             employee=regularization.employee,
             attendance_date=regularization.date,
-            defaults={"status": Attendance.Status.PRESENT},
+            defaults={
+                "organization": regularization.organization,
+                "status": Attendance.Status.PRESENT,
+            },
         )
         attendance_before = AuditService.snapshot(attendance)
         attendance.check_in = regularization.requested_check_in

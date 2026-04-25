@@ -7,6 +7,7 @@ from .views import (
     BiometricAttendanceEventViewSet,
     BiometricDeviceViewSet,
     BiometricIngestView,
+    BioMaxBridgeIngestView,
 )
 
 router = DefaultRouter()
@@ -17,5 +18,6 @@ router.register("", AttendanceViewSet, basename="attendance")
 
 urlpatterns = [
     path("biometric/ingest/", BiometricIngestView.as_view(), name="biometric-attendance-ingest"),
+    path("biomax/bridge/ingest/", BioMaxBridgeIngestView.as_view(), name="biomax-bridge-ingest"),
     *router.urls,
 ]

@@ -13,7 +13,7 @@ class HelpdeskCategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return HelpdeskSelectors.get_category_queryset()
+        return HelpdeskSelectors.get_category_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
@@ -83,4 +83,3 @@ class HelpdeskTicketViewSet(viewsets.ModelViewSet):
     def close(self, request, pk=None):
         ticket = HelpdeskService.close(self.get_object(), request.user)
         return success_response(data=self.get_serializer(ticket).data, message="Ticket closed.")
-

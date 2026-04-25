@@ -2,16 +2,17 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
 
 from apps.accounts.managers import UserManager
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 
 
-class User(TimestampedModel, AbstractBaseUser, PermissionsMixin):
+class User(OrganizationScopedModel, AbstractBaseUser, PermissionsMixin):
     class Role(models.TextChoices):
         EMPLOYEE = "EMPLOYEE", "Employee"
         MANAGER = "MANAGER", "Manager"
         HR = "HR", "HR"
         ACCOUNTS = "ACCOUNTS", "Accounts"
         ADMIN = "ADMIN", "Admin"
+        SUPER_ADMIN = "SUPER_ADMIN", "Super Admin"
 
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=150)
@@ -29,6 +30,9 @@ class User(TimestampedModel, AbstractBaseUser, PermissionsMixin):
 
     class Meta:
         ordering = ["first_name", "last_name"]
+        indexes = [
+            models.Index(fields=["organization", "role"]),
+        ]
 
     def __str__(self):
         return self.email

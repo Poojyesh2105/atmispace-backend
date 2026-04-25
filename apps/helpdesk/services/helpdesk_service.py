@@ -4,6 +4,7 @@ from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.helpdesk.models import HelpdeskCategory, HelpdeskComment, HelpdeskTicket
 from apps.notifications.services.notification_service import NotificationService
 
@@ -11,6 +12,8 @@ from apps.notifications.services.notification_service import NotificationService
 class HelpdeskCategoryService:
     @staticmethod
     def create_category(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         category = HelpdeskCategory.objects.create(**validated_data)
         AuditService.log(actor=actor, action="helpdesk.category.created", entity=category, after=category)
         return category
@@ -30,7 +33,12 @@ class HelpdeskService:
 
     @staticmethod
     def _assign_default_owner(category):
-        return User.objects.filter(role=category.owner_role, is_active=True).order_by("date_joined", "id").first()
+        return (
+            User.objects.for_current_org(organization=category.organization)
+            .filter(role=category.owner_role, is_active=True)
+            .order_by("date_joined", "id")
+            .first()
+        )
 
     @staticmethod
     @transaction.atomic
@@ -42,6 +50,7 @@ class HelpdeskService:
         category = validated_data["category"]
         assigned_user = HelpdeskService._assign_default_owner(category)
         ticket = HelpdeskTicket.objects.create(
+            organization=requester.organization or OrganizationService.resolve_for_actor(actor),
             requester=requester,
             category=category,
             assigned_role=category.owner_role,
@@ -79,7 +88,13 @@ class HelpdeskService:
     def add_comment(ticket, user, message, is_internal=False):
         if is_internal and user.role not in HelpdeskService.MANAGE_ROLES:
             raise exceptions.PermissionDenied("Internal comments are restricted to support roles.")
-        comment = HelpdeskComment.objects.create(ticket=ticket, author=user, message=message, is_internal=is_internal)
+        comment = HelpdeskComment.objects.create(
+            organization=ticket.organization,
+            ticket=ticket,
+            author=user,
+            message=message,
+            is_internal=is_internal,
+        )
         if ticket.requester.user_id != user.pk:
             NotificationService.create_notification(
                 ticket.requester.user,

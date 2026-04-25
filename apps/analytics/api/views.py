@@ -1,3 +1,5 @@
+import pdb
+
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework import viewsets
@@ -21,7 +23,7 @@ class AnalyticsSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated, CanViewAnalytics]
 
     def get_queryset(self):
-        queryset = AnalyticsSelectors.get_snapshot_queryset()
+        queryset = AnalyticsSelectors.get_snapshot_queryset(self.request.user)
         metric_key = self.request.query_params.get("metric_key")
         if metric_key:
             queryset = queryset.filter(metric_key=metric_key)
@@ -29,4 +31,3 @@ class AnalyticsSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         return success_response(data=self.get_serializer(self.get_object()).data)
-

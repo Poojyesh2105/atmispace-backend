@@ -4,6 +4,7 @@ from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.documents.models import DocumentType, EmployeeDocument, MandatoryDocumentRule
 from apps.notifications.services.notification_service import NotificationService
 from apps.policy_engine.services.policy_rule_service import PolicyRuleService
@@ -12,6 +13,8 @@ from apps.policy_engine.services.policy_rule_service import PolicyRuleService
 class DocumentTypeService:
     @staticmethod
     def create_type(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         document_type = DocumentType.objects.create(**validated_data)
         AuditService.log(actor=actor, action="documents.type.created", entity=document_type, after=document_type)
         return document_type
@@ -29,6 +32,8 @@ class DocumentTypeService:
 class MandatoryDocumentRuleService:
     @staticmethod
     def create_rule(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         rule = MandatoryDocumentRule.objects.create(**validated_data)
         AuditService.log(actor=actor, action="documents.rule.created", entity=rule, after=rule)
         return rule
@@ -60,6 +65,7 @@ class EmployeeDocumentService:
         if not EmployeeDocumentService._can_manage_document(actor, employee):
             raise exceptions.PermissionDenied("You cannot upload documents for this employee.")
 
+        validated_data.setdefault("organization", employee.organization or OrganizationService.resolve_for_actor(actor))
         document = EmployeeDocument.objects.create(**validated_data)
         PolicyRuleService.evaluate("COMPLIANCE", document, actor=actor, persist=True)
         NotificationService.create_notification(
@@ -122,4 +128,3 @@ class EmployeeDocumentService:
         )
         AuditService.log(actor=user, action="documents.employee_document.rejected", entity=instance, before=before, after=instance)
         return instance
-

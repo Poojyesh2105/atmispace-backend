@@ -1,13 +1,14 @@
 from decimal import Decimal
 from datetime import time
 
+from django.db.models import Q
 from django.db import models
 
 from apps.accounts.models import User
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 
 
-class Department(TimestampedModel):
+class Department(OrganizationScopedModel):
     name = models.CharField(max_length=120, unique=True)
     code = models.CharField(max_length=20, unique=True)
     description = models.TextField(blank=True)
@@ -19,7 +20,7 @@ class Department(TimestampedModel):
         return self.name
 
 
-class OrganizationSettings(TimestampedModel):
+class OrganizationSettings(OrganizationScopedModel):
     organization_name = models.CharField(max_length=180, default="Organization")
     company_policies = models.TextField(blank=True)
     office_latitude = models.DecimalField(
@@ -37,12 +38,19 @@ class OrganizationSettings(TimestampedModel):
 
     class Meta:
         verbose_name_plural = "Organization settings"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization"],
+                condition=Q(organization__isnull=False),
+                name="unique_organization_settings_per_org",
+            )
+        ]
 
     def __str__(self):
         return self.organization_name
 
 
-class ShiftTemplate(TimestampedModel):
+class ShiftTemplate(OrganizationScopedModel):
     name = models.CharField(max_length=80, unique=True)
     start_time = models.TimeField()
     end_time = models.TimeField()
@@ -56,7 +64,7 @@ class ShiftTemplate(TimestampedModel):
         return self.name
 
 
-class Employee(TimestampedModel):
+class Employee(OrganizationScopedModel):
     class EmploymentType(models.TextChoices):
         FULL_TIME = "FULL_TIME", "Full Time"
         CONTRACT = "CONTRACT", "Contract"
@@ -123,6 +131,16 @@ class Employee(TimestampedModel):
 
     class Meta:
         ordering = ["employee_id"]
+        constraints = [
+            models.CheckConstraint(
+                check=Q(ctc_per_annum__gte=0),
+                name="employee_ctc_non_negative",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["organization", "employee_id"]),
+            models.Index(fields=["organization", "is_active"]),
+        ]
 
     def __str__(self):
         return f"{self.employee_id} - {self.user.full_name}"

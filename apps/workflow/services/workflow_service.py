@@ -10,14 +10,20 @@ from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.models import resolve_current_organization
 from apps.notifications.services.notification_service import NotificationService
 from apps.workflow.models import ApprovalAction, ApprovalInstance, Workflow, WorkflowAssignment, WorkflowStep
+from apps.workflow.selectors import WorkflowSelectors
 
 
 class WorkflowService:
     @staticmethod
     def is_admin_override(user):
-        return bool(user and getattr(user, "is_authenticated", False) and user.role == User.Role.ADMIN)
+        return bool(
+            user
+            and getattr(user, "is_authenticated", False)
+            and user.role in {User.Role.ADMIN, User.Role.SUPER_ADMIN}
+        )
 
     @staticmethod
     def can_manage_pending_approval(user, approval_instance):
@@ -28,38 +34,26 @@ class WorkflowService:
         return approval_instance.assigned_user_id == user.pk or WorkflowService.is_admin_override(user)
 
     @staticmethod
-    def get_workflow_queryset():
-        return Workflow.objects.prefetch_related("steps").all()
+    def get_workflow_queryset(user=None):
+        return WorkflowSelectors.get_workflow_queryset(user)
 
     @staticmethod
     def get_assignment_queryset_for_user(user):
-        queryset = WorkflowAssignment.objects.select_related("workflow", "requested_by", "content_type").prefetch_related(
-            "approval_instances__step",
-            "approval_instances__assigned_user",
-            "approval_instances__actions__actor",
-        )
-
-        if user.role in {"HR", "ADMIN"}:
-            return queryset
-        return queryset.filter(Q(requested_by=user) | Q(approval_instances__assigned_user=user)).distinct()
+        return WorkflowSelectors.get_assignment_queryset_for_user(user)
 
     @staticmethod
     def get_approval_queryset_for_user(user):
-        queryset = ApprovalInstance.objects.select_related(
-            "workflow_assignment__workflow",
-            "workflow_assignment__requested_by",
-            "step",
-            "assigned_user",
-        ).prefetch_related("actions__actor")
-
-        if user.role in {"HR", "ADMIN"}:
-            return queryset
-        return queryset.filter(Q(assigned_user=user) | Q(workflow_assignment__requested_by=user)).distinct()
+        return WorkflowSelectors.get_approval_queryset_for_user(user)
 
     @staticmethod
-    def create_workflow(validated_data, steps_data):
+    def create_workflow(validated_data, steps_data, actor=None):
+        organization = resolve_current_organization(actor=actor)
+        if organization:
+            validated_data.setdefault("organization", organization)
         workflow = Workflow.objects.create(**validated_data)
         for step_data in sorted(steps_data, key=lambda item: item["sequence"]):
+            if organization:
+                step_data = {"organization": organization, **step_data}
             WorkflowStep.objects.create(workflow=workflow, **step_data)
         return workflow
 
@@ -73,6 +67,8 @@ class WorkflowService:
         if steps_data is not None:
             instance.steps.all().delete()
             for step_data in sorted(steps_data, key=lambda item: item["sequence"]):
+                if instance.organization_id and "organization" not in step_data:
+                    step_data = {"organization": instance.organization, **step_data}
                 WorkflowStep.objects.create(workflow=instance, **step_data)
         return instance
 
@@ -88,7 +84,10 @@ class WorkflowService:
     def get_assignment_for_object(module, obj):
         content_type = ContentType.objects.get_for_model(obj.__class__)
         return (
-            WorkflowAssignment.objects.select_related("workflow", "requested_by")
+            WorkflowAssignment.objects.for_current_org(
+                organization=getattr(obj, "organization", None),
+            )
+            .select_related("workflow", "requested_by")
             .prefetch_related("approval_instances__step", "approval_instances__assigned_user", "approval_instances__actions__actor")
             .filter(module=module, content_type=content_type, object_id=obj.pk)
             .order_by("-created_at", "-id")
@@ -102,8 +101,10 @@ class WorkflowService:
             return {}
 
         content_type = ContentType.objects.get_for_model(objects[0].__class__)
+        organization = getattr(objects[0], "organization", None)
         assignments = (
-            WorkflowAssignment.objects.select_related("workflow", "requested_by")
+            WorkflowAssignment.objects.for_current_org(organization=organization)
+            .select_related("workflow", "requested_by")
             .prefetch_related("approval_instances__step", "approval_instances__assigned_user", "approval_instances__actions__actor")
             .filter(module=module, content_type=content_type, object_id__in=[obj.pk for obj in objects])
             .order_by("object_id", "-created_at", "-id")
@@ -149,6 +150,7 @@ class WorkflowService:
 
         WorkflowStep.objects.create(
             workflow=workflow,
+            organization=workflow.organization,
             name="Secondary Manager Review",
             sequence=2,
             assignment_type=WorkflowStep.AssignmentType.SECONDARY_MANAGER,
@@ -156,8 +158,13 @@ class WorkflowService:
         return workflow
 
     @staticmethod
-    def _get_default_workflow(module):
-        workflow = Workflow.objects.filter(module=module, is_active=True).order_by("priority", "id").first()
+    def _get_default_workflow(module, organization=None):
+        workflow = (
+            Workflow.objects.for_current_org(organization=organization)
+            .filter(module=module, is_active=True)
+            .order_by("-organization_id", "priority", "id")
+            .first()
+        )
         if workflow:
             return WorkflowService._ensure_default_workflow_shape(workflow, module)
 
@@ -244,6 +251,7 @@ class WorkflowService:
             raise exceptions.ValidationError({"workflow": f"No active workflow configured for module '{module}'."})
 
         workflow = Workflow.objects.create(
+            organization=organization,
             name=config["name"],
             module=module,
             description="Auto-generated default workflow for backward compatibility.",
@@ -251,7 +259,7 @@ class WorkflowService:
             is_active=True,
         )
         for step in config["steps"]:
-            WorkflowStep.objects.create(workflow=workflow, **step)
+            WorkflowStep.objects.create(workflow=workflow, organization=workflow.organization, **step)
         return WorkflowService._ensure_default_workflow_shape(workflow, module)
 
     @staticmethod
@@ -305,9 +313,17 @@ class WorkflowService:
         if step.assignment_type == WorkflowStep.AssignmentType.USER:
             return step.user, getattr(step.user, "role", "")
         if step.assignment_type == WorkflowStep.AssignmentType.ROLE:
-            assignee = User.objects.filter(role=step.role, is_active=True).order_by("date_joined", "id").first()
+            assignee_qs = User.objects.filter(role=step.role, is_active=True)
+            workflow_org = getattr(step.workflow, "organization", None)
+            if workflow_org:
+                assignee_qs = assignee_qs.for_current_org(organization=workflow_org, include_global=False)
+            assignee = assignee_qs.order_by("date_joined", "id").first()
             return assignee, step.role
         return None, ""
+
+    @staticmethod
+    def _resolve_assignment_organization(target_obj, requested_by):
+        return getattr(target_obj, "organization", None) or resolve_current_organization(actor=requested_by)
 
     @staticmethod
     @transaction.atomic
@@ -316,10 +332,13 @@ class WorkflowService:
         if existing_assignment and existing_assignment.status == WorkflowAssignment.Status.PENDING:
             return existing_assignment
 
-        workflow = WorkflowService._get_default_workflow(module)
+        assignment_organization = WorkflowService._resolve_assignment_organization(target_obj, requested_by)
+        workflow = WorkflowService._get_default_workflow(module, organization=assignment_organization)
         matching_workflow = None
-
-        for candidate in Workflow.objects.filter(module=module, is_active=True).order_by("priority", "id"):
+        for candidate in Workflow.objects.for_current_org(
+            organization=assignment_organization,
+            include_global=True,
+        ).filter(module=module, is_active=True).order_by("priority", "id"):
             if WorkflowService._matches_condition(
                 target_obj, candidate.condition_field, candidate.condition_operator, candidate.condition_value
             ):
@@ -328,6 +347,7 @@ class WorkflowService:
 
         workflow = matching_workflow or workflow
         assignment = WorkflowAssignment.objects.create(
+            organization=assignment_organization,
             workflow=workflow,
             module=module,
             requested_by=requested_by,
@@ -341,6 +361,7 @@ class WorkflowService:
                 target_obj, step.condition_field, step.condition_operator, step.condition_value
             ):
                 approval = ApprovalInstance.objects.create(
+                    organization=assignment_organization,
                     workflow_assignment=assignment,
                     step=step,
                     sequence=step.sequence,
@@ -348,6 +369,7 @@ class WorkflowService:
                     comments="Skipped due to workflow condition.",
                 )
                 ApprovalAction.objects.create(
+                    organization=assignment_organization,
                     approval_instance=approval,
                     action=ApprovalAction.Action.SYSTEM,
                     comments="Step skipped due to condition mismatch.",
@@ -358,6 +380,7 @@ class WorkflowService:
             status = ApprovalInstance.Status.QUEUED if assigned_user else ApprovalInstance.Status.SKIPPED
             comments = "" if assigned_user else "Skipped because no assignee could be resolved."
             approval = ApprovalInstance.objects.create(
+                organization=assignment_organization,
                 workflow_assignment=assignment,
                 step=step,
                 sequence=step.sequence,
@@ -368,6 +391,7 @@ class WorkflowService:
             )
             if not assigned_user:
                 ApprovalAction.objects.create(
+                    organization=assignment_organization,
                     approval_instance=approval,
                     action=ApprovalAction.Action.SYSTEM,
                     comments=comments or "System skipped unresolved workflow step.",
@@ -417,6 +441,7 @@ class WorkflowService:
             raise exceptions.PermissionDenied("This approval step is not assigned to you.")
 
         ApprovalAction.objects.create(
+            organization=approval_instance.organization,
             approval_instance=approval_instance,
             actor=user,
             action=ApprovalAction.Action.COMMENTED,
@@ -437,6 +462,7 @@ class WorkflowService:
         approval_instance.comments = comments
         approval_instance.save(update_fields=["status", "acted_at", "comments", "updated_at"])
         ApprovalAction.objects.create(
+            organization=approval_instance.organization,
             approval_instance=approval_instance,
             actor=user,
             action=ApprovalAction.Action.APPROVED,
@@ -476,6 +502,7 @@ class WorkflowService:
         approval_instance.comments = comments
         approval_instance.save(update_fields=["status", "acted_at", "comments", "updated_at"])
         ApprovalAction.objects.create(
+            organization=approval_instance.organization,
             approval_instance=approval_instance,
             actor=user,
             action=ApprovalAction.Action.REJECTED,

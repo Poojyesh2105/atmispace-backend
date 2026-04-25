@@ -25,7 +25,9 @@ class AuditService:
     def log(actor, action, entity=None, before=None, after=None, entity_type=None, entity_id=None):
         resolved_type = entity_type or getattr(getattr(entity, "_meta", None), "label_lower", entity.__class__.__name__ if entity else "unknown")
         resolved_id = entity_id or getattr(entity, "pk", "")
+        resolved_organization = getattr(entity, "organization", None) or getattr(actor, "organization", None)
         return AuditLog.objects.create(
+            organization=resolved_organization,
             actor=actor,
             action=action,
             entity_type=resolved_type,

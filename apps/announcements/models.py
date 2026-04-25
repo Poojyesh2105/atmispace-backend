@@ -2,11 +2,11 @@ from django.conf import settings
 from django.db import models
 
 from apps.accounts.models import User
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Department
 
 
-class Announcement(TimestampedModel):
+class Announcement(OrganizationScopedModel):
     class AudienceType(models.TextChoices):
         ALL = "ALL", "All Employees"
         ROLE = "ROLE", "Role"
@@ -51,13 +51,14 @@ class Announcement(TimestampedModel):
         indexes = [
             models.Index(fields=["is_published", "starts_at"]),
             models.Index(fields=["audience_type", "role"]),
+            models.Index(fields=["organization", "is_published", "starts_at"]),
         ]
 
     def __str__(self):
         return self.title
 
 
-class AnnouncementAcknowledgement(TimestampedModel):
+class AnnouncementAcknowledgement(OrganizationScopedModel):
     announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name="acknowledgements")
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -73,8 +74,8 @@ class AnnouncementAcknowledgement(TimestampedModel):
         ]
         indexes = [
             models.Index(fields=["user", "acknowledged_at"]),
+            models.Index(fields=["organization", "acknowledged_at"]),
         ]
 
     def __str__(self):
         return f"{self.user.email} - {self.announcement.title}"
-

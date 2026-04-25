@@ -1,10 +1,10 @@
 from django.db import models
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Employee
 
 
-class RatingScale(TimestampedModel):
+class RatingScale(OrganizationScopedModel):
     name = models.CharField(max_length=120, unique=True)
     min_rating = models.DecimalField(max_digits=4, decimal_places=1, default=1)
     max_rating = models.DecimalField(max_digits=4, decimal_places=1, default=5)
@@ -18,7 +18,7 @@ class RatingScale(TimestampedModel):
         return self.name
 
 
-class PerformanceCycle(TimestampedModel):
+class PerformanceCycle(OrganizationScopedModel):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         ACTIVE = "ACTIVE", "Active"
@@ -44,13 +44,14 @@ class PerformanceCycle(TimestampedModel):
         ordering = ["-start_date", "name"]
         indexes = [
             models.Index(fields=["status", "start_date"]),
+            models.Index(fields=["organization", "status", "start_date"]),
         ]
 
     def __str__(self):
         return self.name
 
 
-class PerformanceGoal(TimestampedModel):
+class PerformanceGoal(OrganizationScopedModel):
     class Category(models.TextChoices):
         GOAL = "GOAL", "Goal"
         KRA = "KRA", "KRA"
@@ -75,13 +76,14 @@ class PerformanceGoal(TimestampedModel):
         ordering = ["cycle__start_date", "employee__employee_id", "title"]
         indexes = [
             models.Index(fields=["cycle", "employee", "status"]),
+            models.Index(fields=["organization", "status", "cycle"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.title}"
 
 
-class PerformanceReview(TimestampedModel):
+class PerformanceReview(OrganizationScopedModel):
     class Status(models.TextChoices):
         SELF_PENDING = "SELF_PENDING", "Self Review Pending"
         MANAGER_PENDING = "MANAGER_PENDING", "Manager Review Pending"
@@ -117,8 +119,8 @@ class PerformanceReview(TimestampedModel):
         indexes = [
             models.Index(fields=["status", "cycle"]),
             models.Index(fields=["employee", "cycle"]),
+            models.Index(fields=["organization", "status", "cycle"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.cycle.name}"
-

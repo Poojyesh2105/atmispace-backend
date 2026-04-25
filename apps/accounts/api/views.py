@@ -11,10 +11,12 @@ from apps.accounts.serializers import (
 )
 from apps.accounts.services.auth_service import AuthService
 from apps.core.responses import success_response
+from apps.core.throttling import AuthBurstThrottle, AuthSustainedThrottle
 
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [AuthBurstThrottle, AuthSustainedThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -32,6 +34,7 @@ class LoginView(APIView):
 
 class RefreshTokenView(TokenRefreshView):
     permission_classes = [AllowAny]
+    throttle_classes = [AuthBurstThrottle, AuthSustainedThrottle]
     serializer_class = TokenRefreshRequestSerializer
 
     def post(self, request, *args, **kwargs):

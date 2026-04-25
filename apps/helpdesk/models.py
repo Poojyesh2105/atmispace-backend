@@ -2,11 +2,11 @@ from django.conf import settings
 from django.db import models
 
 from apps.accounts.models import User
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Employee
 
 
-class HelpdeskCategory(TimestampedModel):
+class HelpdeskCategory(OrganizationScopedModel):
     name = models.CharField(max_length=120, unique=True)
     description = models.TextField(blank=True)
     owner_role = models.CharField(max_length=20, choices=User.Role.choices)
@@ -19,7 +19,7 @@ class HelpdeskCategory(TimestampedModel):
         return self.name
 
 
-class HelpdeskTicket(TimestampedModel):
+class HelpdeskTicket(OrganizationScopedModel):
     class Priority(models.TextChoices):
         LOW = "LOW", "Low"
         MEDIUM = "MEDIUM", "Medium"
@@ -53,13 +53,14 @@ class HelpdeskTicket(TimestampedModel):
         indexes = [
             models.Index(fields=["status", "priority"]),
             models.Index(fields=["assigned_role", "status"]),
+            models.Index(fields=["organization", "status", "priority"]),
         ]
 
     def __str__(self):
         return f"{self.requester.employee_id} - {self.subject}"
 
 
-class HelpdeskComment(TimestampedModel):
+class HelpdeskComment(OrganizationScopedModel):
     ticket = models.ForeignKey(HelpdeskTicket, on_delete=models.CASCADE, related_name="comments")
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -76,4 +77,3 @@ class HelpdeskComment(TimestampedModel):
 
     def __str__(self):
         return f"{self.ticket_id} - {self.author_id or 'system'}"
-

@@ -19,6 +19,7 @@ class NotificationService:
         if not user:
             return None
         notification = Notification.objects.create(
+            organization=getattr(user, "organization", None),
             user=user,
             type=NotificationService._resolve_type(notification_type),
             title=title,

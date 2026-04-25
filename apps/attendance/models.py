@@ -1,10 +1,11 @@
+from django.db.models import Q
 from django.db import models
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Employee
 
 
-class Attendance(TimestampedModel):
+class Attendance(OrganizationScopedModel):
     class Status(models.TextChoices):
         PRESENT = "PRESENT", "Present"
         HALF_DAY = "HALF_DAY", "Half Day"
@@ -40,13 +41,14 @@ class Attendance(TimestampedModel):
         ]
         indexes = [
             models.Index(fields=["employee", "attendance_date", "status"]),
+            models.Index(fields=["organization", "attendance_date", "status"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.attendance_date}"
 
 
-class BiometricDevice(TimestampedModel):
+class BiometricDevice(OrganizationScopedModel):
     name = models.CharField(max_length=140)
     device_code = models.CharField(max_length=80, unique=True)
     secret_key = models.CharField(max_length=160)
@@ -61,7 +63,7 @@ class BiometricDevice(TimestampedModel):
         return f"{self.name} ({self.device_code})"
 
 
-class BiometricAttendanceEvent(TimestampedModel):
+class BiometricAttendanceEvent(OrganizationScopedModel):
     class EventType(models.TextChoices):
         CHECK_IN = "CHECK_IN", "Check In"
         CHECK_OUT = "CHECK_OUT", "Check Out"
@@ -97,13 +99,14 @@ class BiometricAttendanceEvent(TimestampedModel):
         indexes = [
             models.Index(fields=["device", "device_user_id", "occurred_at"]),
             models.Index(fields=["employee", "occurred_at"]),
+            models.Index(fields=["organization", "occurred_at", "status"]),
         ]
 
     def __str__(self):
         return f"{self.device.device_code} - {self.device_user_id} - {self.event_type}"
 
 
-class AttendanceRegularization(TimestampedModel):
+class AttendanceRegularization(OrganizationScopedModel):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
@@ -129,6 +132,7 @@ class AttendanceRegularization(TimestampedModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["employee", "date", "status"]),
+            models.Index(fields=["organization", "date", "status"]),
         ]
 
     def __str__(self):

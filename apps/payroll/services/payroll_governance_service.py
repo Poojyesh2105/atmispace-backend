@@ -8,6 +8,7 @@ from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.employees.models import Employee
 from apps.notifications.services.notification_service import NotificationService
 from apps.payroll.models import PayrollAdjustment, PayrollCycle, PayrollRun, SalaryRevision
@@ -28,6 +29,9 @@ class PayrollGovernanceService:
     @staticmethod
     def create_cycle(validated_data, actor):
         PayrollGovernanceService._check_manage_permission(actor)
+        organization = OrganizationService.resolve_for_actor(actor)
+        if organization:
+            validated_data.setdefault("organization", organization)
         cycle = PayrollCycle.objects.create(**validated_data)
         AuditService.log(actor=actor, action="payroll.cycle.created", entity=cycle, after=cycle)
         return cycle
@@ -45,6 +49,9 @@ class PayrollGovernanceService:
     @staticmethod
     def create_adjustment(validated_data, actor):
         PayrollGovernanceService._check_manage_permission(actor)
+        organization = OrganizationService.resolve_for_actor(actor)
+        if organization:
+            validated_data.setdefault("organization", organization)
         adjustment = PayrollAdjustment.objects.create(created_by=actor, **validated_data)
         AuditService.log(actor=actor, action="payroll.adjustment.created", entity=adjustment, after=adjustment)
         return adjustment
@@ -79,7 +86,7 @@ class PayrollGovernanceService:
         PayrollGovernanceService._check_manage_permission(actor)
         PolicyRuleService.evaluate("PAYROLL", cycle, actor=actor, persist=True)
         run, _ = PayrollRun.objects.get_or_create(cycle=cycle, defaults={"generated_by": actor})
-        employees = Employee.objects.filter(is_active=True, user__is_active=True).select_related("user")
+        employees = Employee.objects.for_current_org(actor).filter(is_active=True, user__is_active=True).select_related("user")
         total_employees = 0
         skipped_employee_codes = []
         for employee in employees:
@@ -107,11 +114,12 @@ class PayrollGovernanceService:
                 f"{run_note}. Skipped {len(skipped_employee_codes)} employee(s) without configured CTC: "
                 f"{', '.join(skipped_employee_codes)}."
             )
+        run.organization = cycle.organization or OrganizationService.resolve_for_actor(actor)
         run.generated_by = actor
         run.total_employees = total_employees
         run.status = PayrollRun.Status.DRAFT
         run.notes = run_note
-        run.save(update_fields=["generated_by", "total_employees", "status", "notes", "updated_at"])
+        run.save(update_fields=["organization", "generated_by", "total_employees", "status", "notes", "updated_at"])
         AuditService.log(
             actor=actor,
             action="payroll.run.generated",
@@ -195,6 +203,7 @@ class SalaryRevisionService:
     def apply_revision(actor, employee, new_ctc, effective_date, reason):
         status = SalaryRevision.Status.APPLIED if effective_date <= timezone.localdate() else SalaryRevision.Status.SCHEDULED
         revision = SalaryRevision.objects.create(
+            organization=employee.organization or OrganizationService.resolve_for_actor(actor),
             employee=employee,
             previous_ctc=employee.ctc_per_annum,
             new_ctc=new_ctc,

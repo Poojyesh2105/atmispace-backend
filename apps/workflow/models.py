@@ -4,10 +4,10 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
 from apps.accounts.models import User
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 
 
-class Workflow(TimestampedModel):
+class Workflow(OrganizationScopedModel):
     class Module(models.TextChoices):
         LEAVE_REQUEST = "leave_request", "Leave Request"
         ATTENDANCE_REGULARIZATION = "attendance_regularization", "Attendance Regularization"
@@ -46,7 +46,7 @@ class Workflow(TimestampedModel):
         return f"{self.module} - {self.name}"
 
 
-class WorkflowStep(TimestampedModel):
+class WorkflowStep(OrganizationScopedModel):
     class AssignmentType(models.TextChoices):
         ROLE = "ROLE", "Role"
         PRIMARY_MANAGER = "PRIMARY_MANAGER", "Primary Manager"
@@ -84,7 +84,7 @@ class WorkflowStep(TimestampedModel):
         return f"{self.workflow.name} - {self.sequence} - {self.name}"
 
 
-class WorkflowAssignment(TimestampedModel):
+class WorkflowAssignment(OrganizationScopedModel):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
@@ -113,13 +113,14 @@ class WorkflowAssignment(TimestampedModel):
         indexes = [
             models.Index(fields=["module", "status"]),
             models.Index(fields=["content_type", "object_id"]),
+            models.Index(fields=["organization", "module", "status"]),
         ]
 
     def __str__(self):
         return f"{self.module} #{self.object_id} - {self.status}"
 
 
-class ApprovalInstance(TimestampedModel):
+class ApprovalInstance(OrganizationScopedModel):
     class Status(models.TextChoices):
         QUEUED = "QUEUED", "Queued"
         PENDING = "PENDING", "Pending"
@@ -151,13 +152,14 @@ class ApprovalInstance(TimestampedModel):
         indexes = [
             models.Index(fields=["assigned_user", "status"]),
             models.Index(fields=["workflow_assignment", "status"]),
+            models.Index(fields=["organization", "status", "assigned_user"]),
         ]
 
     def __str__(self):
         return f"{self.workflow_assignment_id} - {self.sequence} - {self.status}"
 
 
-class ApprovalAction(TimestampedModel):
+class ApprovalAction(OrganizationScopedModel):
     class Action(models.TextChoices):
         APPROVED = "APPROVED", "Approved"
         REJECTED = "REJECTED", "Rejected"

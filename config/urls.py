@@ -21,4 +21,6 @@ urlpatterns = [
     path("api/v1/analytics/", include("apps.analytics.api.urls")),
     path("api/v1/policy-rules/", include("apps.policy_engine.api.urls")),
     path("api/v1/helpdesk/", include("apps.helpdesk.api.urls")),
+    path("api/v1/platform/", include("apps.platform.api.urls")),
+    path("api/v1/organizations/", include("apps.core.api.organizations.urls")),
 ]

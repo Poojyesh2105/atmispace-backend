@@ -28,7 +28,7 @@ class OnboardingPlanViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return LifecycleSelectors.get_onboarding_plan_queryset()
+        return LifecycleSelectors.get_onboarding_plan_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
@@ -56,7 +56,7 @@ class OnboardingTaskTemplateViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsLifecycleAdmin]
 
     def get_queryset(self):
-        queryset = LifecycleSelectors.get_onboarding_task_template_queryset()
+        queryset = LifecycleSelectors.get_onboarding_task_template_queryset(self.request.user)
         plan_id = self.request.query_params.get("plan")
         if plan_id:
             queryset = queryset.filter(plan_id=plan_id)
@@ -163,4 +163,3 @@ class EmployeeChangeRequestViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         return success_response(data=self.get_serializer(self.get_object()).data)
-

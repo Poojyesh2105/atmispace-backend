@@ -1,5 +1,6 @@
 from collections import Counter
 from datetime import timedelta
+from types import SimpleNamespace
 
 from django.db.models import Count, F, Q, Sum
 from django.db.models.functions import TruncMonth
@@ -9,6 +10,7 @@ from apps.accounts.models import User
 from apps.analytics.models import AnalyticsSnapshot
 from apps.attendance.models import Attendance
 from apps.attendance.services.attendance_service import AttendanceService
+from apps.core.models import resolve_current_organization
 from apps.documents.models import EmployeeDocument
 from apps.employees.models import Employee
 from apps.leave_management.models import LeaveRequest
@@ -17,16 +19,32 @@ from apps.payroll.models import PayrollCycle, PayrollRun
 
 
 class AnalyticsService:
+    ANALYTICS_ADMIN_ROLES = {User.Role.HR, User.Role.ADMIN, User.Role.ACCOUNTS, User.Role.SUPER_ADMIN}
+
+    @staticmethod
+    def _organization_for_user(user):
+        if user.role == User.Role.SUPER_ADMIN:
+            return None
+        return resolve_current_organization(actor=user)
+
     @staticmethod
     def _employee_queryset_for_user(user):
         queryset = Employee.objects.select_related("user", "manager", "secondary_manager")
         employee = getattr(user, "employee_profile", None)
-        if user.role in {User.Role.HR, User.Role.ADMIN, User.Role.ACCOUNTS}:
+
+        organization = AnalyticsService._organization_for_user(user)
+        if user.role in AnalyticsService.ANALYTICS_ADMIN_ROLES:
+            if user.role != User.Role.SUPER_ADMIN and organization is None:
+                return queryset.none()
+            if organization is not None:
+                queryset = queryset.filter(organization=organization)
             return queryset.filter(is_active=True, user__is_active=True)
+
         if user.role == User.Role.MANAGER and employee:
             return queryset.filter(
                 is_active=True,
                 user__is_active=True,
+                organization=employee.organization,
             ).filter(
                 Q(pk=employee.pk) | Q(manager=employee) | Q(secondary_manager=employee)
             )
@@ -42,6 +60,7 @@ class AnalyticsService:
         today = timezone.localdate()
         month_start = today.replace(day=1)
         trailing_start = month_start - timedelta(days=150)
+        organization = AnalyticsService._organization_for_user(user)
 
         employee_queryset = Employee.objects.filter(pk__in=employee_ids)
         active_headcount = employee_queryset.count()
@@ -89,8 +108,13 @@ class AnalyticsService:
         for month_key, minutes in sorted(overtime_counter.items()):
             overtime_trend.append({"label": month_key, "value": round(minutes / 60, 2)})
 
-        payroll_cycle = PayrollCycle.objects.order_by("-payroll_month", "-created_at").first()
-        payroll_run = PayrollRun.objects.select_related("cycle").order_by("-created_at").first()
+        payroll_cycle_queryset = PayrollCycle.objects.all()
+        payroll_run_queryset = PayrollRun.objects.select_related("cycle")
+        if organization is not None:
+            payroll_cycle_queryset = payroll_cycle_queryset.filter(organization=organization)
+            payroll_run_queryset = payroll_run_queryset.filter(organization=organization)
+        payroll_cycle = payroll_cycle_queryset.order_by("-payroll_month", "-created_at").first()
+        payroll_run = payroll_run_queryset.order_by("-created_at").first()
         payroll_readiness = {
             "latest_cycle": payroll_cycle.name if payroll_cycle else "",
             "cycle_status": payroll_cycle.status if payroll_cycle else "",
@@ -129,7 +153,7 @@ class AnalyticsService:
             {"label": "Attrition this month", "value": attrition_count, "helper": "Completed exits in the current month"},
             {"label": "Departments covered", "value": len(department_breakdown), "helper": "Departments in current visibility scope"},
         ]
-        if user.role in {User.Role.HR, User.Role.ADMIN, User.Role.ACCOUNTS}:
+        if user.role in AnalyticsService.ANALYTICS_ADMIN_ROLES:
             cards.append(
                 {
                     "label": "Payroll readiness",
@@ -148,9 +172,16 @@ class AnalyticsService:
         }
 
     @staticmethod
-    def refresh_snapshots(snapshot_date=None):
+    def refresh_snapshots(snapshot_date=None, organization=None):
         snapshot_date = snapshot_date or timezone.localdate()
-        payload = AnalyticsService.get_dashboard(type("AnalyticsUser", (), {"role": User.Role.ADMIN, "employee_profile": None})())
+        payload = AnalyticsService.get_dashboard(
+            SimpleNamespace(
+                role=User.Role.ADMIN,
+                employee_profile=None,
+                organization=organization,
+                organization_id=getattr(organization, "pk", None),
+            )
+        )
         snapshots = []
         for metric_key, key in (
             (AnalyticsSnapshot.MetricKey.HEADCOUNT, "cards"),
@@ -163,6 +194,7 @@ class AnalyticsService:
                 snapshot_date=snapshot_date,
                 metric_key=metric_key,
                 role_scope="ADMIN",
+                organization=organization,
                 defaults={"payload": payload.get(key, {})},
             )
             snapshots.append(snapshot)

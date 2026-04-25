@@ -6,16 +6,16 @@ from apps.lifecycle.models import EmployeeChangeRequest, EmployeeOnboarding, Emp
 
 class LifecycleSelectors:
     @staticmethod
-    def get_onboarding_plan_queryset():
-        return OnboardingPlan.objects.select_related("department").prefetch_related("task_templates").all()
+    def get_onboarding_plan_queryset(user=None):
+        return OnboardingPlan.objects.for_current_org(user).select_related("department").prefetch_related("task_templates")
 
     @staticmethod
-    def get_onboarding_task_template_queryset():
-        return OnboardingTaskTemplate.objects.select_related("plan").all()
+    def get_onboarding_task_template_queryset(user=None):
+        return OnboardingTaskTemplate.objects.for_current_org(user).select_related("plan")
 
     @staticmethod
     def get_employee_onboarding_queryset_for_user(user):
-        queryset = EmployeeOnboarding.objects.select_related("employee__user", "plan", "initiated_by").prefetch_related("tasks")
+        queryset = EmployeeOnboarding.objects.for_current_org(user).select_related("employee__user", "plan", "initiated_by").prefetch_related("tasks")
         employee = getattr(user, "employee_profile", None)
         if user.role in {User.Role.HR, User.Role.ADMIN}:
             return queryset
@@ -27,7 +27,7 @@ class LifecycleSelectors:
 
     @staticmethod
     def get_employee_onboarding_task_queryset_for_user(user):
-        queryset = EmployeeOnboardingTask.objects.select_related("onboarding__employee__user", "completed_by")
+        queryset = EmployeeOnboardingTask.objects.for_current_org(user).select_related("onboarding__employee__user", "completed_by")
         employee = getattr(user, "employee_profile", None)
         if user.role in {User.Role.HR, User.Role.ADMIN}:
             return queryset
@@ -44,7 +44,7 @@ class LifecycleSelectors:
 
     @staticmethod
     def get_offboarding_queryset_for_user(user):
-        queryset = OffboardingCase.objects.select_related("employee__user", "initiated_by").prefetch_related("tasks")
+        queryset = OffboardingCase.objects.for_current_org(user).select_related("employee__user", "initiated_by").prefetch_related("tasks")
         employee = getattr(user, "employee_profile", None)
         if user.role in {User.Role.HR, User.Role.ADMIN, User.Role.ACCOUNTS}:
             return queryset
@@ -56,7 +56,7 @@ class LifecycleSelectors:
 
     @staticmethod
     def get_offboarding_task_queryset_for_user(user):
-        queryset = OffboardingTask.objects.select_related("offboarding_case__employee__user", "completed_by")
+        queryset = OffboardingTask.objects.for_current_org(user).select_related("offboarding_case__employee__user", "completed_by")
         employee = getattr(user, "employee_profile", None)
         if user.role in {User.Role.HR, User.Role.ADMIN, User.Role.ACCOUNTS}:
             return queryset
@@ -73,7 +73,7 @@ class LifecycleSelectors:
 
     @staticmethod
     def get_change_request_queryset_for_user(user):
-        queryset = EmployeeChangeRequest.objects.select_related("employee__user", "requested_by", "approved_by")
+        queryset = EmployeeChangeRequest.objects.for_current_org(user).select_related("employee__user", "requested_by", "approved_by")
         employee = getattr(user, "employee_profile", None)
         if user.role in {User.Role.HR, User.Role.ADMIN}:
             return queryset
@@ -82,4 +82,3 @@ class LifecycleSelectors:
         if employee:
             return queryset.filter(employee=employee)
         return queryset.none()
-

@@ -4,12 +4,15 @@ from django.contrib.contenttypes.models import ContentType
 from rest_framework import exceptions
 
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.policy_engine.models import PolicyEvaluationLog, PolicyRule
 
 
 class PolicyRuleService:
     @staticmethod
     def create_rule(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         rule = PolicyRule.objects.create(**validated_data)
         AuditService.log(actor=actor, action="policy.rule.created", entity=rule, after=rule)
         return rule
@@ -66,7 +69,11 @@ class PolicyRuleService:
 
     @staticmethod
     def evaluate(module, target_obj, actor=None, persist=False, raise_on_block=True):
-        rules = PolicyRule.objects.filter(module=module, is_active=True).order_by("priority", "id")
+        rules = (
+            PolicyRule.objects.for_current_org(actor=actor, organization=getattr(target_obj, "organization", None))
+            .filter(module=module, is_active=True)
+            .order_by("priority", "id")
+        )
         content_type = ContentType.objects.get_for_model(target_obj.__class__)
         results = []
         block_messages = []
@@ -86,6 +93,7 @@ class PolicyRuleService:
 
             if persist:
                 PolicyEvaluationLog.objects.create(
+                    organization=getattr(target_obj, "organization", None) or OrganizationService.resolve_for_actor(actor),
                     rule=rule,
                     module=module,
                     content_type=content_type,
@@ -104,4 +112,3 @@ class PolicyRuleService:
             raise exceptions.ValidationError({"policy_rules": block_messages})
 
         return results
-

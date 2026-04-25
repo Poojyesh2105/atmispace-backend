@@ -6,6 +6,7 @@ from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.lifecycle.models import EmployeeChangeRequest, EmployeeOnboarding, EmployeeOnboardingTask, OffboardingCase, OffboardingTask, OnboardingPlan, OnboardingTaskTemplate
 from apps.notifications.services.notification_service import NotificationService
 from apps.policy_engine.services.policy_rule_service import PolicyRuleService
@@ -16,6 +17,8 @@ from apps.workflow.services.workflow_service import WorkflowService
 class OnboardingPlanService:
     @staticmethod
     def create_plan(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         plan = OnboardingPlan.objects.create(**validated_data)
         AuditService.log(actor=actor, action="lifecycle.onboarding_plan.created", entity=plan, after=plan)
         return plan
@@ -33,6 +36,8 @@ class OnboardingPlanService:
 class OnboardingTaskTemplateService:
     @staticmethod
     def create_template(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         template = OnboardingTaskTemplate.objects.create(**validated_data)
         AuditService.log(actor=actor, action="lifecycle.onboarding_template.created", entity=template, after=template)
         return template
@@ -53,11 +58,13 @@ class EmployeeOnboardingService:
     def create_onboarding(validated_data, actor):
         employee = validated_data["employee"]
         plan = validated_data.get("plan")
-        onboarding = EmployeeOnboarding.objects.create(initiated_by=actor, **validated_data)
+        organization = employee.organization or OrganizationService.resolve_for_actor(actor)
+        onboarding = EmployeeOnboarding.objects.create(organization=organization, initiated_by=actor, **validated_data)
 
         if plan:
             for template in plan.task_templates.all().order_by("sequence", "id"):
                 EmployeeOnboardingTask.objects.create(
+                    organization=organization,
                     onboarding=onboarding,
                     template_task=template,
                     title=template.title,
@@ -110,9 +117,17 @@ class OffboardingService:
     @staticmethod
     @transaction.atomic
     def create_case(validated_data, actor):
-        offboarding_case = OffboardingCase.objects.create(initiated_by=actor, status=OffboardingCase.Status.PENDING_APPROVAL, **validated_data)
+        employee = validated_data["employee"]
+        organization = employee.organization or OrganizationService.resolve_for_actor(actor)
+        offboarding_case = OffboardingCase.objects.create(
+            organization=organization,
+            initiated_by=actor,
+            status=OffboardingCase.Status.PENDING_APPROVAL,
+            **validated_data,
+        )
         for index, task in enumerate(OffboardingService.DEFAULT_TASKS, start=1):
             OffboardingTask.objects.create(
+                organization=organization,
                 offboarding_case=offboarding_case,
                 title=task["title"],
                 owner_role=task["owner_role"],
@@ -178,7 +193,12 @@ class EmployeeChangeRequestService:
     @staticmethod
     @transaction.atomic
     def create_change_request(validated_data, actor):
-        change_request = EmployeeChangeRequest.objects.create(requested_by=actor, **validated_data)
+        employee = validated_data["employee"]
+        change_request = EmployeeChangeRequest.objects.create(
+            organization=employee.organization or OrganizationService.resolve_for_actor(actor),
+            requested_by=actor,
+            **validated_data,
+        )
         PolicyRuleService.evaluate("LIFECYCLE", change_request, actor=actor, persist=True)
         WorkflowService.start_workflow(
             Workflow.Module.LIFECYCLE_CASE,
@@ -248,4 +268,3 @@ class EmployeeChangeRequestService:
             f"Your {change_request.get_change_type_display().lower()} request was rejected.",
         )
         AuditService.log(actor=actor, action="lifecycle.employee_change_request.rejected", entity=change_request, before=before, after=change_request)
-

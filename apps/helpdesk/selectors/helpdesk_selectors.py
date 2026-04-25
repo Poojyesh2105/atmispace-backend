@@ -6,12 +6,12 @@ from apps.helpdesk.models import HelpdeskCategory, HelpdeskTicket
 
 class HelpdeskSelectors:
     @staticmethod
-    def get_category_queryset():
-        return HelpdeskCategory.objects.all()
+    def get_category_queryset(user=None):
+        return HelpdeskCategory.objects.for_current_org(user)
 
     @staticmethod
     def get_ticket_queryset_for_user(user):
-        queryset = HelpdeskTicket.objects.select_related("requester__user", "category", "assigned_user").prefetch_related("comments__author")
+        queryset = HelpdeskTicket.objects.for_current_org(user).select_related("requester__user", "category", "assigned_user").prefetch_related("comments__author")
         employee = getattr(user, "employee_profile", None)
 
         if user.role == User.Role.ADMIN:
@@ -21,4 +21,3 @@ class HelpdeskSelectors:
         if employee:
             return queryset.filter(Q(requester=employee) | Q(assigned_user=user))
         return queryset.none()
-

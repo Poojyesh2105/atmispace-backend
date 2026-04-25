@@ -13,6 +13,7 @@ from django.test import TestCase
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.accounts.models import User
+from apps.core.models import Organization
 from apps.employees.models import Department, Employee
 from apps.payroll.models import (
     PayrollCycle,
@@ -29,23 +30,27 @@ from apps.payroll.services.payroll_service import PayslipService
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_user(email, role=User.Role.EMPLOYEE, password="Test@1234"):
+def make_user(email, role=User.Role.EMPLOYEE, password="Test@1234", organization=None):
     return User.objects.create_user(
         email=email,
         password=password,
         first_name="Test",
         last_name="User",
         role=role,
+        organization=organization,
     )
 
 
-def make_employee(user, emp_id, dept=None, ctc=None):
+def make_employee(user, emp_id, dept=None, ctc=None, organization=None, manager=None, secondary_manager=None):
     emp = Employee.objects.create(
         user=user,
         employee_id=emp_id,
         designation="Dev",
         hire_date=date.today(),
         department=dept,
+        organization=organization or getattr(user, "organization", None),
+        manager=manager,
+        secondary_manager=secondary_manager,
     )
     if ctc is not None:
         emp.ctc_per_annum = Decimal(str(ctc))
@@ -549,3 +554,54 @@ class SalaryComponentTest(TestCase):
         lop_entry = payslip.component_entries.get(component_code=PayslipService.LOP_COMPONENT_CODE)
         self.assertEqual(lop_entry.calculated_amount, expected_lop)
         self.assertIsNone(lop_entry.component)
+
+
+class PayslipOrganizationScopingTest(TestCase):
+    def setUp(self):
+        self.org_one = Organization.objects.create(name="Payroll Org One", code="PORG1", slug="payroll-org-one")
+        self.org_two = Organization.objects.create(name="Payroll Org Two", code="PORG2", slug="payroll-org-two")
+        self.dept_one = Department.objects.create(name="Payroll Org1 Dept", code="POD1", organization=self.org_one)
+        self.dept_two = Department.objects.create(name="Payroll Org2 Dept", code="POD2", organization=self.org_two)
+
+        self.hr_user = make_user("org-hr@test.com", role=User.Role.HR, organization=self.org_one)
+        self.manager_user = make_user("org-manager@test.com", role=User.Role.MANAGER, organization=self.org_one)
+        self.other_hr_user = make_user("org-two-hr@test.com", role=User.Role.HR, organization=self.org_two)
+
+        self.hr_employee = make_employee(self.hr_user, "ORG-HR", self.dept_one, organization=self.org_one)
+        self.manager_employee = make_employee(self.manager_user, "ORG-MGR", self.dept_one, organization=self.org_one)
+        self.other_hr_employee = make_employee(self.other_hr_user, "ORG2-HR", self.dept_two, organization=self.org_two)
+
+        self.team_user = make_user("team-member@test.com", organization=self.org_one)
+        self.team_employee = make_employee(
+            self.team_user,
+            "ORG-TEAM",
+            self.dept_one,
+            ctc=240000,
+            organization=self.org_one,
+            manager=self.manager_employee,
+        )
+
+        self.other_user = make_user("outside-member@test.com", organization=self.org_two)
+        self.other_employee = make_employee(
+            self.other_user,
+            "ORG-OUT",
+            self.dept_two,
+            ctc=240000,
+            organization=self.org_two,
+        )
+
+    def test_manager_queryset_is_limited_to_own_org_and_team(self):
+        with patch("apps.payroll.services.payroll_service.PayslipService.calculate_lop_days", return_value=Decimal("0")):
+            team_payslip = PayslipService.generate_payslip(self.hr_user, self.team_employee, date(2026, 4, 1))
+            outsider_payslip = PayslipService.generate_payslip(self.other_hr_user, self.other_employee, date(2026, 4, 1))
+
+        queryset = PayslipService.get_queryset_for_user(self.manager_user)
+        queryset_ids = set(queryset.values_list("id", flat=True))
+        self.assertIn(team_payslip.pk, queryset_ids)
+        self.assertNotIn(outsider_payslip.pk, queryset_ids)
+
+    def test_generated_component_entries_inherit_payslip_organization(self):
+        with patch("apps.payroll.services.payroll_service.PayslipService.calculate_lop_days", return_value=Decimal("0")):
+            payslip = PayslipService.generate_payslip(self.hr_user, self.team_employee, date(2026, 5, 1))
+        entry_organization_ids = set(payslip.component_entries.values_list("organization_id", flat=True))
+        self.assertEqual(entry_organization_ids, {self.org_one.id})

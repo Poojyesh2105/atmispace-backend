@@ -6,6 +6,7 @@ from rest_framework import exceptions
 from apps.attendance.models import Attendance, BiometricAttendanceEvent, BiometricDevice
 from apps.attendance.services.attendance_service import AttendanceService
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.employees.models import Employee
 
 
@@ -65,6 +66,37 @@ class BiometricAttendanceService:
         )
 
     @classmethod
+    def ingest_event_idempotent(cls, bridge_payload):
+        occurred_at = bridge_payload.get("punch_time")
+        if not occurred_at:
+            raise exceptions.ValidationError({"punch_time": "Punch time is required."})
+        device_code = bridge_payload.get("device_id") or bridge_payload.get("device_code")
+        device = BiometricDevice.objects.filter(device_code=device_code, is_active=True).first()
+        if not device:
+            raise exceptions.ValidationError({"device_id": "Active biometric device not found."})
+
+        external_event_id = bridge_payload.get("external_event_id")
+        created = True
+        if external_event_id:
+            created = not BiometricAttendanceEvent.objects.filter(
+                device=device,
+                external_event_id=external_event_id,
+            ).exists()
+
+        event = cls.ingest_event(
+            {
+                "device_code": device.device_code,
+                "secret_key": bridge_payload.get("secret_key") or device.secret_key,
+                "biometric_id": bridge_payload.get("employee_code") or bridge_payload.get("biometric_id"),
+                "event_type": bridge_payload.get("punch_type") or "AUTO",
+                "occurred_at": occurred_at,
+                "external_event_id": external_event_id,
+                "raw_payload": bridge_payload.get("raw_payload") or bridge_payload,
+            }
+        )
+        return event, created
+
+    @classmethod
     @transaction.atomic
     def ingest_event(cls, validated_data):
         device = cls.authenticate_device(validated_data["device_code"], validated_data["secret_key"])
@@ -82,6 +114,7 @@ class BiometricAttendanceService:
                 device=device,
                 external_event_id=external_event_id,
                 defaults={
+                    "organization": device.organization,
                     "device_user_id": device_user_id,
                     "event_type": event_type,
                     "occurred_at": occurred_at,
@@ -95,6 +128,7 @@ class BiometricAttendanceService:
             if event:
                 return event
             event = BiometricAttendanceEvent.objects.create(
+                organization=device.organization,
                 device=device,
                 device_user_id=device_user_id,
                 event_type=event_type,
@@ -167,6 +201,7 @@ class BiometricAttendanceService:
         created = False
         if not attendance:
             attendance = Attendance.objects.create(
+                organization=employee.organization or OrganizationService.resolve_for_actor(employee.user),
                 employee=employee,
                 attendance_date=attendance_date,
                 status=Attendance.Status.PRESENT,

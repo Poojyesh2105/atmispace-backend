@@ -18,7 +18,7 @@ class DocumentTypeViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return DocumentSelectors.get_document_type_queryset()
+        return DocumentSelectors.get_document_type_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
@@ -46,7 +46,7 @@ class MandatoryDocumentRuleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsDocumentAdmin]
 
     def get_queryset(self):
-        return DocumentSelectors.get_mandatory_rule_queryset()
+        return DocumentSelectors.get_mandatory_rule_queryset(self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -103,4 +103,3 @@ class EmployeeDocumentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         document = EmployeeDocumentService.reject_document(request.user, self.get_object(), serializer.validated_data.get("remarks", ""))
         return success_response(data=self.get_serializer(document).data, message="Document rejected.")
-

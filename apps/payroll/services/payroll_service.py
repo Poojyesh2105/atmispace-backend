@@ -3,11 +3,14 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
+from apps.employees.selectors import EmployeeSelectors
 from apps.employees.models import Employee
 from apps.leave_management.models import LeaveBalance, LeaveRequest
 from apps.leave_management.services.leave_service import LeaveRequestService
@@ -16,8 +19,8 @@ from apps.payroll.services.payroll_component_service import SalaryComponentServi
 
 
 class PayslipService:
-    VIEW_ROLES = {User.Role.MANAGER, User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN}
-    GENERATE_ROLES = {User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN}
+    VIEW_ROLES = {User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN, User.Role.SUPER_ADMIN}
+    GENERATE_ROLES = {User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN, User.Role.SUPER_ADMIN}
     LOP_COMPONENT_NAME = "Loss of Pay"
     LOP_COMPONENT_CODE = "LOP"
     LOP_COMPONENT_DISPLAY_ORDER = 9000
@@ -28,8 +31,7 @@ class PayslipService:
             return False
         if user.role in PayslipService.VIEW_ROLES:
             return True
-        current_employee = getattr(user, "employee_profile", None)
-        return bool(employee and current_employee and current_employee.pk == employee.pk)
+        return EmployeeSelectors.can_view_compensation(user, employee)
 
     @staticmethod
     def can_generate_payslip(user):
@@ -48,10 +50,13 @@ class PayslipService:
 
     @staticmethod
     def get_queryset_for_user(user):
-        queryset = Payslip.objects.select_related("employee__user", "generated_by", "employee__department")
+        queryset = Payslip.objects.for_current_org(user).select_related("employee__user", "generated_by", "employee__department")
         employee = getattr(user, "employee_profile", None)
         if user.role in PayslipService.VIEW_ROLES:
             return queryset
+        if user.role == User.Role.MANAGER and employee:
+            team_ids = EmployeeSelectors.get_team_member_ids(employee)
+            return queryset.filter(Q(employee=employee) | Q(employee_id__in=team_ids))
         if employee:
             return queryset.filter(employee=employee)
         return queryset.none()
@@ -291,6 +296,7 @@ class PayslipService:
             payroll_month=calculation["payroll_month"],
             defaults={
                 **calculation,
+                "organization": employee.organization or OrganizationService.resolve_for_actor(user),
                 "payroll_cycle": payroll_cycle,
                 "salary_component_template": resolved_template,
                 "salary_component_template_name": resolved_template.name,
@@ -308,7 +314,7 @@ class PayslipService:
         # Recreate component entries (delete old ones first on regeneration)
         PayslipComponentEntry.objects.filter(payslip=payslip).delete()
         PayslipComponentEntry.objects.bulk_create([
-            PayslipComponentEntry(payslip=payslip, **entry_data)
+            PayslipComponentEntry(organization=payslip.organization, payslip=payslip, **entry_data)
             for entry_data in component_entries_data
         ])
 

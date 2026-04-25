@@ -9,7 +9,7 @@ class AnnouncementSelectors:
     @staticmethod
     def get_queryset_for_user(user):
         now = timezone.now()
-        queryset = Announcement.objects.select_related("created_by", "department", "target_user").prefetch_related("acknowledgements")
+        queryset = Announcement.objects.for_current_org(user).select_related("created_by", "department", "target_user").prefetch_related("acknowledgements")
 
         if user.role in {User.Role.HR, User.Role.ADMIN}:
             return queryset
@@ -29,4 +29,3 @@ class AnnouncementSelectors:
     @staticmethod
     def get_dashboard_queryset_for_user(user):
         return AnnouncementSelectors.get_queryset_for_user(user).filter(show_on_dashboard=True)
-

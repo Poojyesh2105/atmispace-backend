@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.core.services import OrganizationService
 from apps.employees.models import Employee
 from apps.payroll.models import (
     EmployeeSalaryComponentTemplate,
@@ -83,12 +84,35 @@ class PayslipGenerateSerializer(serializers.Serializer):
     )
     notes = serializers.CharField(required=False, allow_blank=True)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            self.fields["employee"].queryset = Employee.objects.for_current_org(user).select_related("user")
+            self.fields["salary_component_template"].queryset = (
+                SalaryComponentTemplate.objects.for_current_org(user).filter(is_active=True)
+            )
+
+    def validate_payroll_month(self, value):
+        return value.replace(day=1)
+
 
 class PayrollCycleSerializer(serializers.ModelSerializer):
     class Meta:
         model = PayrollCycle
         fields = ("id", "name", "payroll_month", "start_date", "end_date", "status", "notes", "created_at", "updated_at")
         read_only_fields = ("id", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
+        payroll_month = attrs.get("payroll_month", getattr(self.instance, "payroll_month", None))
+        if start_date and end_date and start_date > end_date:
+            raise serializers.ValidationError({"end_date": "Payroll cycle end date must be on or after the start date."})
+        if payroll_month and payroll_month.day != 1:
+            attrs["payroll_month"] = payroll_month.replace(day=1)
+        return attrs
 
 
 class PayrollRunSerializer(serializers.ModelSerializer):
@@ -143,6 +167,19 @@ class PayrollAdjustmentSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id", "cycle_name", "employee_name", "employee_code", "created_by_name", "created_at", "updated_at")
 
+    def validate_amount(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Adjustment amount cannot be negative.")
+        return value
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            self.fields["cycle"].queryset = PayrollCycle.objects.for_current_org(user)
+            self.fields["employee"].queryset = Employee.objects.for_current_org(user).select_related("user")
+
 
 class SalaryRevisionSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source="employee.user.full_name", read_only=True)
@@ -167,6 +204,22 @@ class SalaryRevisionSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = fields
+
+    def validate(self, attrs):
+        previous_ctc = attrs.get("previous_ctc", getattr(self.instance, "previous_ctc", None))
+        new_ctc = attrs.get("new_ctc", getattr(self.instance, "new_ctc", None))
+        if previous_ctc is not None and previous_ctc < 0:
+            raise serializers.ValidationError({"previous_ctc": "Previous CTC cannot be negative."})
+        if new_ctc is not None and new_ctc <= 0:
+            raise serializers.ValidationError({"new_ctc": "New CTC must be greater than zero."})
+        return attrs
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            self.fields["employee"].queryset = Employee.objects.for_current_org(user).select_related("user")
 
 
 class SalaryComponentSerializer(serializers.ModelSerializer):
@@ -198,6 +251,14 @@ class SalaryComponentSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("id", "template_name", "base_component_name", "created_at", "updated_at")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            self.fields["template"].queryset = SalaryComponentTemplate.objects.for_current_org(user)
+            self.fields["base_component"].queryset = SalaryComponent.objects.for_current_org(user)
 
     def validate(self, attrs):
         code = attrs.get("code", getattr(self.instance, "code", ""))
@@ -272,6 +333,14 @@ class EmployeeSalaryComponentTemplateSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and getattr(user, "is_authenticated", False):
+            self.fields["employee"].queryset = Employee.objects.for_current_org(user).select_related("user")
+            self.fields["template"].queryset = SalaryComponentTemplate.objects.for_current_org(user).filter(is_active=True)
 
 
 class PayslipTemplateSerializer(serializers.ModelSerializer):

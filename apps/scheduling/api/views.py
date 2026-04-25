@@ -13,7 +13,7 @@ class ShiftRotationRuleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return SchedulingSelectors.get_rotation_rule_queryset()
+        return SchedulingSelectors.get_rotation_rule_queryset(self.request.user)
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy", "apply"}:
@@ -123,4 +123,3 @@ class ScheduleConflictViewSet(viewsets.ReadOnlyModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         return success_response(data=self.get_serializer(self.get_object()).data)
-

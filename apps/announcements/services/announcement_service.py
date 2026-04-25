@@ -4,13 +4,18 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.announcements.models import Announcement, AnnouncementAcknowledgement
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.notifications.services.notification_service import NotificationService
 
 
 class AnnouncementService:
     @staticmethod
     def create(validated_data, actor):
-        announcement = Announcement.objects.create(created_by=actor, **validated_data)
+        announcement = Announcement.objects.create(
+            organization=OrganizationService.resolve_for_actor(actor),
+            created_by=actor,
+            **validated_data,
+        )
         AuditService.log(actor=actor, action="announcement.created", entity=announcement, after=announcement)
         return announcement
 
@@ -25,7 +30,7 @@ class AnnouncementService:
 
     @staticmethod
     def _get_recipients(announcement):
-        users = User.objects.filter(is_active=True)
+        users = User.objects.for_current_org(organization=announcement.organization).filter(is_active=True)
         if announcement.audience_type == Announcement.AudienceType.ROLE and announcement.role:
             return users.filter(role=announcement.role)
         if announcement.audience_type == Announcement.AudienceType.DEPARTMENT and announcement.department_id:
@@ -58,10 +63,12 @@ class AnnouncementService:
         acknowledgement, _ = AnnouncementAcknowledgement.objects.get_or_create(
             announcement=announcement,
             user=user,
-            defaults={"acknowledged_at": timezone.now()},
+            defaults={
+                "organization": announcement.organization,
+                "acknowledged_at": timezone.now(),
+            },
         )
         if not acknowledgement.acknowledged_at:
             acknowledgement.acknowledged_at = timezone.now()
             acknowledgement.save(update_fields=["acknowledged_at", "updated_at"])
         return acknowledgement
-

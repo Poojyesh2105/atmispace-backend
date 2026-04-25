@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.db import transaction
 
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
 from apps.holidays.services.holiday_service import HolidayService
 from apps.lifecycle.models import OffboardingCase
 from apps.notifications.services.notification_service import NotificationService
@@ -12,6 +13,8 @@ from apps.scheduling.models import ScheduleConflict, ShiftRosterEntry, ShiftRota
 class ShiftRotationRuleService:
     @staticmethod
     def create_rule(validated_data, actor):
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         rule = ShiftRotationRule.objects.create(**validated_data)
         AuditService.log(actor=actor, action="scheduling.rotation_rule.created", entity=rule, after=rule)
         return rule
@@ -31,7 +34,13 @@ class SchedulingService:
     def _record_conflict(entry, conflict_type, message, actor):
         entry.is_conflicted = True
         entry.save(update_fields=["is_conflicted", "updated_at"])
-        return ScheduleConflict.objects.create(roster_entry=entry, conflict_type=conflict_type, message=message, reported_by=actor)
+        return ScheduleConflict.objects.create(
+            organization=entry.organization,
+            roster_entry=entry,
+            conflict_type=conflict_type,
+            message=message,
+            reported_by=actor,
+        )
 
     @staticmethod
     def _apply_holiday_awareness(entry, actor):
@@ -67,7 +76,14 @@ class SchedulingService:
         entry, _ = ShiftRosterEntry.objects.update_or_create(
             employee=employee,
             roster_date=roster_date,
-            defaults={"shift_template": shift_template, "source": source, "notes": notes, "is_holiday": False, "is_conflicted": False},
+            defaults={
+                "organization": employee.organization or OrganizationService.resolve_for_actor(actor),
+                "shift_template": shift_template,
+                "source": source,
+                "notes": notes,
+                "is_holiday": False,
+                "is_conflicted": False,
+            },
         )
         if not employee.is_active or not employee.user.is_active:
             SchedulingService._record_conflict(entry, ScheduleConflict.ConflictType.INACTIVE_EMPLOYEE, "Employee is inactive.", actor)
@@ -118,4 +134,3 @@ class SchedulingService:
             f"Rotation rule {rule.name} was applied successfully.",
         )
         return entries
-

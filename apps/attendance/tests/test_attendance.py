@@ -13,6 +13,7 @@ from apps.attendance.models import Attendance, AttendanceRegularization, Biometr
 from apps.attendance.services.attendance_service import AttendanceService
 from apps.attendance.services.biometric_service import BiometricAttendanceService
 from apps.attendance.services.regularization_service import AttendanceRegularizationService
+from apps.core.models import Organization
 from apps.employees.models import Department, Employee
 
 
@@ -20,17 +21,18 @@ from apps.employees.models import Department, Employee
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_user(email, role=User.Role.EMPLOYEE, password="Test@1234"):
+def make_user(email, role=User.Role.EMPLOYEE, password="Test@1234", organization=None):
     return User.objects.create_user(
         email=email,
         password=password,
         first_name="Test",
         last_name="User",
         role=role,
+        organization=organization,
     )
 
 
-def make_employee(user, emp_id="EMP001", dept=None, biometric_id=None):
+def make_employee(user, emp_id="EMP001", dept=None, biometric_id=None, organization=None):
     return Employee.objects.create(
         user=user,
         employee_id=emp_id,
@@ -38,11 +40,12 @@ def make_employee(user, emp_id="EMP001", dept=None, biometric_id=None):
         designation="Dev",
         hire_date=date.today(),
         department=dept,
+        organization=organization or getattr(user, "organization", None),
     )
 
 
-def make_department(name="Engineering", code="ENG"):
-    return Department.objects.create(name=name, code=code)
+def make_department(name="Engineering", code="ENG", organization=None):
+    return Department.objects.create(name=name, code=code, organization=organization)
 
 
 def authenticate_client(client, user):
@@ -301,6 +304,59 @@ class BiometricAttendanceServiceTestCase(TestCase):
         self.assertIsNone(event.employee)
         self.assertIsNone(event.attendance)
         self.assertIn("No active employee", event.message)
+
+
+class BiometricBridgeIngestTestCase(TestCase):
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Attendance Org", code="AORG", slug="attendance-org")
+        self.department = make_department("Bridge Dept", "BRG", organization=self.organization)
+        self.user = make_user("bridge-emp@example.com", organization=self.organization)
+        self.employee = make_employee(
+            self.user,
+            "BRG-001",
+            self.department,
+            biometric_id="BRIDGE1001",
+            organization=self.organization,
+        )
+        self.device = BiometricDevice.objects.create(
+            organization=self.organization,
+            name="Bridge Device",
+            device_code="BIOMAX",
+            secret_key="bridge-secret",
+            location_name="HQ",
+        )
+        self.client = APIClient()
+
+    def test_biomax_bridge_ingest_uses_trusted_device_and_stays_idempotent(self):
+        payload = {
+            "device_id": self.device.device_code,
+            "employee_code": self.employee.biometric_id,
+            "punch_time": timezone.now().isoformat(),
+            "punch_type": "CHECK_IN",
+            "external_event_id": "bridge-event-1",
+        }
+
+        first_response = self.client.post(
+            reverse("biomax-bridge-ingest"),
+            payload,
+            format="json",
+            HTTP_X_BIOMAX_BRIDGE="1",
+        )
+        self.assertEqual(first_response.status_code, 200)
+        self.assertTrue(first_response.data["data"]["created"])
+
+        event = BiometricAttendanceEvent.objects.get(external_event_id="bridge-event-1")
+        self.assertEqual(event.organization, self.organization)
+
+        second_response = self.client.post(
+            reverse("biomax-bridge-ingest"),
+            payload,
+            format="json",
+            HTTP_X_BIOMAX_BRIDGE="1",
+        )
+        self.assertEqual(second_response.status_code, 200)
+        self.assertFalse(second_response.data["data"]["created"])
+        self.assertEqual(BiometricAttendanceEvent.objects.filter(external_event_id="bridge-event-1").count(), 1)
 
 
 # ---------------------------------------------------------------------------

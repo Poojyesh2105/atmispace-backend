@@ -1,3 +1,4 @@
+from apps.core.services import OrganizationService
 from apps.holidays.models import EmployeeHolidayAssignment, Holiday, HolidayCalendar
 
 
@@ -7,7 +8,7 @@ class HolidayService:
         assignment = getattr(employee, "holiday_assignment", None)
         if assignment:
             return assignment.calendar
-        return HolidayCalendar.objects.filter(is_default=True).order_by("id").first()
+        return HolidayCalendar.objects.for_current_org(organization=employee.organization).filter(is_default=True).order_by("id").first()
 
     @staticmethod
     def get_holiday_dates_for_employee(employee, start_date, end_date):
@@ -19,13 +20,15 @@ class HolidayService:
         )
 
     @staticmethod
-    def create_calendar(validated_data):
+    def create_calendar(validated_data, actor=None):
         if validated_data.get("is_default"):
             HolidayCalendar.objects.filter(is_default=True).update(is_default=False)
+        if organization := OrganizationService.resolve_for_actor(actor):
+            validated_data.setdefault("organization", organization)
         return HolidayCalendar.objects.create(**validated_data)
 
     @staticmethod
-    def update_calendar(instance, validated_data):
+    def update_calendar(instance, validated_data, actor=None):
         if validated_data.get("is_default"):
             HolidayCalendar.objects.exclude(pk=instance.pk).filter(is_default=True).update(is_default=False)
         for attr, value in validated_data.items():
@@ -35,5 +38,8 @@ class HolidayService:
 
     @staticmethod
     def assign_calendar(employee, calendar):
-        assignment, _ = EmployeeHolidayAssignment.objects.update_or_create(employee=employee, defaults={"calendar": calendar})
+        assignment, _ = EmployeeHolidayAssignment.objects.update_or_create(
+            employee=employee,
+            defaults={"organization": employee.organization or calendar.organization, "calendar": calendar},
+        )
         return assignment

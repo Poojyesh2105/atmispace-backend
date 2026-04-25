@@ -3,10 +3,10 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 
 
-class PolicyRule(TimestampedModel):
+class PolicyRule(OrganizationScopedModel):
     class Module(models.TextChoices):
         LEAVE = "LEAVE", "Leave"
         ATTENDANCE = "ATTENDANCE", "Attendance"
@@ -44,13 +44,14 @@ class PolicyRule(TimestampedModel):
         ordering = ["module", "priority", "name"]
         indexes = [
             models.Index(fields=["module", "is_active", "priority"]),
+            models.Index(fields=["organization", "module", "is_active"]),
         ]
 
     def __str__(self):
         return f"{self.module} - {self.name}"
 
 
-class PolicyEvaluationLog(TimestampedModel):
+class PolicyEvaluationLog(OrganizationScopedModel):
     rule = models.ForeignKey(
         PolicyRule,
         on_delete=models.SET_NULL,
@@ -79,8 +80,8 @@ class PolicyEvaluationLog(TimestampedModel):
         indexes = [
             models.Index(fields=["module", "triggered", "created_at"]),
             models.Index(fields=["content_type", "object_id"]),
+            models.Index(fields=["organization", "module", "triggered"]),
         ]
 
     def __str__(self):
         return f"{self.module} #{self.object_id} - {self.effect_type or 'NONE'}"
-

@@ -11,8 +11,10 @@ from apps.holidays.services.holiday_service import HolidayService
 
 class HolidayCalendarViewSet(viewsets.ModelViewSet):
     serializer_class = HolidayCalendarSerializer
-    queryset = HolidayCalendar.objects.prefetch_related("holidays").all()
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return HolidayCalendar.objects.for_current_org(self.request.user).prefetch_related("holidays")
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
@@ -22,13 +24,13 @@ class HolidayCalendarViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        calendar = HolidayService.create_calendar(serializer.validated_data)
+        calendar = HolidayService.create_calendar(serializer.validated_data, actor=request.user)
         return success_response(data=self.get_serializer(calendar).data, message="Holiday calendar created.", status_code=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         serializer = self.get_serializer(self.get_object(), data=request.data, partial=kwargs.get("partial", False))
         serializer.is_valid(raise_exception=True)
-        calendar = HolidayService.update_calendar(self.get_object(), serializer.validated_data)
+        calendar = HolidayService.update_calendar(self.get_object(), serializer.validated_data, actor=request.user)
         return success_response(data=self.get_serializer(calendar).data, message="Holiday calendar updated.")
 
     def retrieve(self, request, *args, **kwargs):
@@ -37,13 +39,23 @@ class HolidayCalendarViewSet(viewsets.ModelViewSet):
 
 class HolidayViewSet(viewsets.ModelViewSet):
     serializer_class = HolidaySerializer
-    queryset = Holiday.objects.select_related("calendar").all()
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Holiday.objects.for_current_org(self.request.user).select_related("calendar")
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy"}:
             return [IsAuthenticated(), IsAdminOrHR()]
         return super().get_permissions()
+
+    def perform_create(self, serializer):
+        calendar = serializer.validated_data["calendar"]
+        serializer.save(organization=calendar.organization)
+
+    def perform_update(self, serializer):
+        calendar = serializer.validated_data.get("calendar", serializer.instance.calendar)
+        serializer.save(organization=calendar.organization)
 
     def retrieve(self, request, *args, **kwargs):
         return success_response(data=self.get_serializer(self.get_object()).data)
@@ -51,8 +63,10 @@ class HolidayViewSet(viewsets.ModelViewSet):
 
 class EmployeeHolidayAssignmentViewSet(viewsets.ModelViewSet):
     serializer_class = EmployeeHolidayAssignmentSerializer
-    queryset = EmployeeHolidayAssignment.objects.select_related("employee__user", "calendar").all()
     permission_classes = [IsAuthenticated, IsAdminOrHR]
+
+    def get_queryset(self):
+        return EmployeeHolidayAssignment.objects.for_current_org(self.request.user).select_related("employee__user", "calendar")
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

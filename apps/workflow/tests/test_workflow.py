@@ -10,6 +10,7 @@ from django.test import TestCase
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.accounts.models import User
+from apps.core.models import Organization
 from apps.employees.models import Department, Employee
 from apps.leave_management.models import LeaveBalance, LeavePolicy, LeaveRequest
 from apps.workflow.models import (
@@ -25,17 +26,18 @@ from apps.workflow.services.workflow_service import WorkflowService
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_user(email, role=User.Role.EMPLOYEE, password="Test@1234"):
+def make_user(email, role=User.Role.EMPLOYEE, password="Test@1234", organization=None):
     return User.objects.create_user(
         email=email,
         password=password,
         first_name="Test",
         last_name="User",
         role=role,
+        organization=organization,
     )
 
 
-def make_employee(user, emp_id, dept=None, manager=None, secondary_manager=None):
+def make_employee(user, emp_id, dept=None, manager=None, secondary_manager=None, organization=None):
     return Employee.objects.create(
         user=user,
         employee_id=emp_id,
@@ -44,6 +46,7 @@ def make_employee(user, emp_id, dept=None, manager=None, secondary_manager=None)
         department=dept,
         manager=manager,
         secondary_manager=secondary_manager,
+        organization=organization or getattr(user, "organization", None),
     )
 
 
@@ -554,3 +557,82 @@ class AssignmentStatusTest(TestCase):
 
         assignment.refresh_from_db()
         self.assertEqual(assignment.status, WorkflowAssignment.Status.REJECTED)
+
+
+class WorkflowOrganizationScopingTest(TestCase):
+    def setUp(self):
+        self.org_one = Organization.objects.create(name="Workflow Org One", code="WORG1", slug="workflow-org-one")
+        self.org_two = Organization.objects.create(name="Workflow Org Two", code="WORG2", slug="workflow-org-two")
+        self.dept_one = Department.objects.create(name="WF Org1 Dept", code="WF1", organization=self.org_one)
+        self.dept_two = Department.objects.create(name="WF Org2 Dept", code="WF2", organization=self.org_two)
+
+        self.hr_org_one = make_user("wf-org1-hr@test.com", role=User.Role.HR, organization=self.org_one)
+        self.hr_org_two = make_user("wf-org2-hr@test.com", role=User.Role.HR, organization=self.org_two)
+        self.employee_user = make_user("wf-org2-emp@test.com", organization=self.org_two)
+
+        self.hr_emp_one = make_employee(self.hr_org_one, "WF-O1-HR", self.dept_one, organization=self.org_one)
+        self.hr_emp_two = make_employee(self.hr_org_two, "WF-O2-HR", self.dept_two, organization=self.org_two)
+        self.employee = make_employee(self.employee_user, "WF-O2-EMP", self.dept_two, organization=self.org_two)
+
+        LeavePolicy.objects.get_or_create(organization=self.org_two)
+
+        self.org_one_workflow = Workflow.objects.create(
+            organization=self.org_one,
+            name="Org One Leave Workflow",
+            module=Workflow.Module.LEAVE_REQUEST,
+            is_active=True,
+            priority=1,
+            condition_operator=Workflow.ConditionOperator.ALWAYS,
+        )
+        WorkflowStep.objects.create(
+            organization=self.org_one,
+            workflow=self.org_one_workflow,
+            name="Org One HR Step",
+            sequence=1,
+            assignment_type=WorkflowStep.AssignmentType.ROLE,
+            role=User.Role.HR,
+        )
+
+        self.org_two_workflow = Workflow.objects.create(
+            organization=self.org_two,
+            name="Org Two Leave Workflow",
+            module=Workflow.Module.LEAVE_REQUEST,
+            is_active=True,
+            priority=1,
+            condition_operator=Workflow.ConditionOperator.ALWAYS,
+        )
+        WorkflowStep.objects.create(
+            organization=self.org_two,
+            workflow=self.org_two_workflow,
+            name="Org Two HR Step",
+            sequence=1,
+            assignment_type=WorkflowStep.AssignmentType.ROLE,
+            role=User.Role.HR,
+        )
+
+    def test_start_workflow_selects_current_org_workflow_and_propagates_org(self):
+        leave = make_leave_request(self.employee)
+        leave.organization = self.org_two
+        leave.save(update_fields=["organization", "updated_at"])
+
+        with patch("apps.workflow.services.workflow_service.NotificationService.notify_pending_approval"):
+            assignment = WorkflowService.start_workflow(
+                Workflow.Module.LEAVE_REQUEST,
+                leave,
+                requested_by=self.employee_user,
+            )
+
+        pending = assignment.approval_instances.get(status=ApprovalInstance.Status.PENDING)
+        self.assertEqual(assignment.organization, self.org_two)
+        self.assertEqual(assignment.workflow, self.org_two_workflow)
+        self.assertEqual(pending.organization, self.org_two)
+        self.assertEqual(pending.assigned_user, self.hr_org_two)
+
+        with patch("apps.workflow.services.workflow_service.NotificationService.notify_workflow_completed"), patch(
+            "apps.leave_management.services.leave_service.LeaveRequestService.finalize_workflow_approval"
+        ):
+            WorkflowService.approve(self.hr_org_two, pending, comments="Approved in org two")
+
+        action = pending.actions.order_by("-id").first()
+        self.assertIsNotNone(action)
+        self.assertEqual(action.organization, self.org_two)

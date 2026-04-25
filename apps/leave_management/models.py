@@ -1,12 +1,13 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from django.db.models import UniqueConstraint
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 from apps.employees.models import Employee
 
 
-class LeaveBalance(TimestampedModel):
+class LeaveBalance(OrganizationScopedModel):
     class LeaveType(models.TextChoices):
         CASUAL = "CASUAL", "Casual"
         SICK = "SICK", "Sick"
@@ -20,11 +21,14 @@ class LeaveBalance(TimestampedModel):
 
     class Meta:
         ordering = ["employee__employee_id", "leave_type"]
-        constraints = [
-            models.UniqueConstraint(fields=["employee", "leave_type"], name="unique_leave_balance_type")
-        ]
         indexes = [
             models.Index(fields=["employee", "leave_type"]),
+            models.Index(fields=["organization", "leave_type"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["employee", "leave_type"], name="unique_leave_balance_type"),
+            models.CheckConstraint(check=Q(allocated_days__gte=0), name="leave_balance_allocated_non_negative"),
+            models.CheckConstraint(check=Q(used_days__gte=0), name="leave_balance_used_non_negative"),
         ]
 
     def __str__(self):
@@ -35,7 +39,7 @@ class LeaveBalance(TimestampedModel):
         return self.allocated_days - self.used_days
 
 
-class LeavePolicy(TimestampedModel):
+class LeavePolicy(OrganizationScopedModel):
     class CarryForwardFrequency(models.TextChoices):
         MONTHLY = "MONTHLY", "Monthly"
         YEARLY = "YEARLY", "Yearly"
@@ -58,12 +62,19 @@ class LeavePolicy(TimestampedModel):
 
     class Meta:
         verbose_name_plural = "Leave policies"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization"],
+                condition=Q(organization__isnull=False),
+                name="unique_leave_policy_per_org",
+            )
+        ]
 
     def __str__(self):
         return "Leave Policy"
 
 
-class LeaveRequest(TimestampedModel):
+class LeaveRequest(OrganizationScopedModel):
     class DurationType(models.TextChoices):
         FULL_DAY = "FULL_DAY", "Full Day"
         HALF_DAY = "HALF_DAY", "Half Day"
@@ -101,13 +112,18 @@ class LeaveRequest(TimestampedModel):
         indexes = [
             models.Index(fields=["status", "start_date"]),
             models.Index(fields=["employee", "status"]),
+            models.Index(fields=["organization", "status", "start_date"]),
+        ]
+        constraints = [
+            models.CheckConstraint(check=Q(total_days__gt=0), name="leave_request_total_days_positive"),
+            models.CheckConstraint(check=Q(lop_days_applied__gte=0), name="leave_request_lop_days_non_negative"),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.leave_type} - {self.status}"
 
 
-class EarnedLeaveAdjustment(TimestampedModel):
+class EarnedLeaveAdjustment(OrganizationScopedModel):
     class Status(models.TextChoices):
         PENDING = "PENDING", "Pending"
         APPROVED = "APPROVED", "Approved"
@@ -132,13 +148,14 @@ class EarnedLeaveAdjustment(TimestampedModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["employee", "work_date", "status"]),
+            models.Index(fields=["organization", "work_date", "status"]),
         ]
 
     def __str__(self):
         return f"{self.employee.employee_id} - {self.work_date} - {self.status}"
 
 
-class LeaveCarryForwardLog(TimestampedModel):
+class LeaveCarryForwardLog(OrganizationScopedModel):
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="carry_forward_logs")
     leave_type = models.CharField(max_length=20, choices=LeaveBalance.LeaveType.choices)
     from_month = models.DateField()

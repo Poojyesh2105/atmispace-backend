@@ -1,10 +1,10 @@
 from django.conf import settings
 from django.db import models
 
-from apps.core.models import TimestampedModel
+from apps.core.models import OrganizationScopedModel
 
 
-class Notification(TimestampedModel):
+class Notification(OrganizationScopedModel):
     class Type(models.TextChoices):
         LEAVE_APPLIED = "LEAVE_APPLIED", "Leave Applied"
         LEAVE_APPROVED = "LEAVE_APPROVED", "Leave Approved"
@@ -33,6 +33,7 @@ class Notification(TimestampedModel):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["user", "is_read", "created_at"]),
+            models.Index(fields=["organization", "is_read", "created_at"]),
         ]
 
     def __str__(self):

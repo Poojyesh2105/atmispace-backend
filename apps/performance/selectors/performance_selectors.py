@@ -6,16 +6,16 @@ from apps.performance.models import PerformanceCycle, PerformanceGoal, Performan
 
 class PerformanceSelectors:
     @staticmethod
-    def get_rating_scale_queryset():
-        return RatingScale.objects.all()
+    def get_rating_scale_queryset(user=None):
+        return RatingScale.objects.for_current_org(user)
 
     @staticmethod
-    def get_cycle_queryset():
-        return PerformanceCycle.objects.select_related("rating_scale").all()
+    def get_cycle_queryset(user=None):
+        return PerformanceCycle.objects.for_current_org(user).select_related("rating_scale")
 
     @staticmethod
     def get_goal_queryset_for_user(user):
-        queryset = PerformanceGoal.objects.select_related("employee__user", "cycle", "employee__manager__user")
+        queryset = PerformanceGoal.objects.for_current_org(user).select_related("employee__user", "cycle", "employee__manager__user")
         employee = getattr(user, "employee_profile", None)
 
         if user.role in {User.Role.HR, User.Role.ADMIN}:
@@ -30,7 +30,7 @@ class PerformanceSelectors:
 
     @staticmethod
     def get_review_queryset_for_user(user):
-        queryset = PerformanceReview.objects.select_related("employee__user", "cycle", "manager__user", "employee__manager__user")
+        queryset = PerformanceReview.objects.for_current_org(user).select_related("employee__user", "cycle", "manager__user", "employee__manager__user")
         employee = getattr(user, "employee_profile", None)
 
         if user.role in {User.Role.HR, User.Role.ADMIN}:
@@ -54,4 +54,3 @@ class PerformanceSelectors:
         if user.role == User.Role.MANAGER:
             return queryset.filter(status=PerformanceReview.Status.MANAGER_PENDING)
         return queryset.filter(status=PerformanceReview.Status.SELF_PENDING)
-

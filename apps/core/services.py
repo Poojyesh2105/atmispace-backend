@@ -1,20 +1,38 @@
+from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Count, Sum, Q
 from django.utils import timezone
 
-from apps.attendance.models import Attendance
-from apps.attendance.services.attendance_service import AttendanceService
-from apps.employees.models import Employee
+from apps.core.models import Organization
+from apps.employees.selectors import EmployeeSelectors
 from apps.leave_management.models import LeaveBalance, LeaveRequest
 from apps.workflow.services.workflow_service import WorkflowService
 
 
+class OrganizationService:
+    @staticmethod
+    def get_default_organization():
+        
+        return Organization.objects.filter(is_active=True, is_default=True).order_by("id").first()
+
+    @staticmethod
+    def resolve_for_actor(actor=None, organization=None):
+        if organization is not None:
+            return organization
+        if actor is not None and getattr(actor, "organization_id", None):
+            return actor.organization
+        return OrganizationService.get_default_organization()
+
+
 class DashboardService:
+    
     @staticmethod
     def _get_scope(user):
+        from apps.attendance.services.attendance_service import AttendanceService
         employee = getattr(user, "employee_profile", None)
-        employee_qs = Employee.objects.select_related("department", "manager", "secondary_manager", "user")
-        leave_qs = LeaveRequest.objects.select_related("employee__user", "approver").all()
-        attendance_qs = Attendance.objects.select_related("employee__user").all()
+        employee_qs = EmployeeSelectors.base_employee_queryset(user)
+        leave_qs = LeaveRequest.objects.for_current_org(user).select_related("employee__user", "approver")
+        attendance_qs = AttendanceService.get_queryset_for_user(user)
 
         if user.role == "EMPLOYEE" and employee:
             return (
@@ -23,7 +41,7 @@ class DashboardService:
                 attendance_qs.filter(employee=employee),
             )
         if user.role == "MANAGER" and employee:
-            team_ids = Employee.objects.filter(Q(manager=employee) | Q(secondary_manager=employee)).values_list("pk", flat=True)
+            team_ids = EmployeeSelectors.get_team_member_ids(employee)
             return (
                 employee_qs.filter(Q(pk=employee.pk) | Q(pk__in=team_ids)),
                 leave_qs.filter(Q(employee=employee) | Q(employee_id__in=team_ids)),
@@ -33,6 +51,7 @@ class DashboardService:
 
     @staticmethod
     def _get_today_attendance_summary(attendance_qs, today):
+        from apps.attendance.services.attendance_service import AttendanceService
         today_qs = attendance_qs.filter(attendance_date=today)
         present_today = today_qs.exclude(check_in__isnull=True).count()
         total_work_minutes = sum(AttendanceService.calculate_work_minutes(attendance) for attendance in today_qs)
@@ -66,29 +85,36 @@ class DashboardService:
 
     @staticmethod
     def get_summary(user):
-        today = timezone.localdate()
-        employee_qs, base_leave_qs, attendance_qs = DashboardService._get_scope(user)
-        base_attendance_qs = attendance_qs.filter(attendance_date=today)
-        pending_leaves = base_leave_qs.filter(status="PENDING").count()
-        approved_leaves = base_leave_qs.filter(status="APPROVED").count()
-        present_today = base_attendance_qs.exclude(check_in__isnull=True).count()
-        department_breakdown = list(
-            employee_qs.values("department__name").annotate(total=Count("id")).order_by("department__name")
-        )
-        total_work_minutes = sum(AttendanceService.calculate_work_minutes(attendance) for attendance in base_attendance_qs)
-        total_hours = total_work_minutes / 60
+        cache_key = f"dashboard:summary:{getattr(user, 'organization_id', 'global')}:{user.role}:{user.pk}"
 
-        return {
-            "employee_count": employee_qs.count(),
-            "pending_leaves": pending_leaves,
-            "approved_leaves": approved_leaves,
-            "present_today": present_today,
-            "average_hours_today": round(total_hours / present_today, 2) if present_today else 0,
-            "departments": department_breakdown,
-        }
+        def build_summary():
+            from apps.attendance.services.attendance_service import AttendanceService
+            today = timezone.localdate()
+            employee_qs, base_leave_qs, attendance_qs = DashboardService._get_scope(user)
+            base_attendance_qs = attendance_qs.filter(attendance_date=today)
+            pending_leaves = base_leave_qs.filter(status="PENDING").count()
+            approved_leaves = base_leave_qs.filter(status="APPROVED").count()
+            present_today = base_attendance_qs.exclude(check_in__isnull=True).count()
+            department_breakdown = list(
+                employee_qs.values("department__name").annotate(total=Count("id")).order_by("department__name")
+            )
+            total_work_minutes = sum(AttendanceService.calculate_work_minutes(attendance) for attendance in base_attendance_qs)
+            total_hours = total_work_minutes / 60
+
+            return {
+                "employee_count": employee_qs.count(),
+                "pending_leaves": pending_leaves,
+                "approved_leaves": approved_leaves,
+                "present_today": present_today,
+                "average_hours_today": round(total_hours / present_today, 2) if present_today else 0,
+                "departments": department_breakdown,
+            }
+
+        return cache.get_or_set(cache_key, build_summary, timeout=settings.DASHBOARD_CACHE_TTL_SECONDS)
 
     @staticmethod
     def get_employee_dashboard(user):
+        from apps.attendance.services.attendance_service import AttendanceService
         employee = getattr(user, "employee_profile", None)
         today = timezone.localdate()
         employee_qs, leave_qs, attendance_qs = DashboardService._get_scope(user)

@@ -9,16 +9,16 @@ from apps.documents.models import DocumentType, EmployeeDocument, MandatoryDocum
 
 class DocumentSelectors:
     @staticmethod
-    def get_document_type_queryset():
-        return DocumentType.objects.all()
+    def get_document_type_queryset(user=None):
+        return DocumentType.objects.for_current_org(user)
 
     @staticmethod
-    def get_mandatory_rule_queryset():
-        return MandatoryDocumentRule.objects.select_related("document_type", "department").all()
+    def get_mandatory_rule_queryset(user=None):
+        return MandatoryDocumentRule.objects.for_current_org(user).select_related("document_type", "department")
 
     @staticmethod
     def get_document_queryset_for_user(user):
-        queryset = EmployeeDocument.objects.select_related(
+        queryset = EmployeeDocument.objects.for_current_org(user).select_related(
             "employee__user",
             "employee__manager__user",
             "document_type",
@@ -44,4 +44,3 @@ class DocumentSelectors:
             expiry_date__lte=threshold,
             status__in=[EmployeeDocument.Status.PENDING, EmployeeDocument.Status.VERIFIED],
         )
-

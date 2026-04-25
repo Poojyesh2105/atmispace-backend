@@ -8,6 +8,8 @@ from rest_framework import exceptions
 
 from apps.accounts.models import User
 from apps.audit.services.audit_service import AuditService
+from apps.core.services import OrganizationService
+from apps.employees.selectors import EmployeeSelectors
 from apps.holidays.services.holiday_service import HolidayService
 from apps.leave_management.models import EarnedLeaveAdjustment, LeaveBalance, LeavePolicy, LeaveRequest
 from apps.notifications.services.notification_service import NotificationService
@@ -17,15 +19,21 @@ from apps.workflow.services.workflow_service import WorkflowService
 
 class LeavePolicyService:
     @staticmethod
-    def get_policy():
-        policy, _ = LeavePolicy.objects.get_or_create(pk=1)
+    def get_policy(actor=None, organization=None):
+        resolved_organization = OrganizationService.resolve_for_actor(actor, organization=organization)
+        if resolved_organization:
+            policy, _ = LeavePolicy.objects.get_or_create(organization=resolved_organization)
+        else:
+            policy, _ = LeavePolicy.objects.get_or_create(pk=1)
         return policy
 
     @staticmethod
-    def update_policy(validated_data):
-        policy = LeavePolicyService.get_policy()
+    def update_policy(validated_data, actor=None, organization=None):
+        policy = LeavePolicyService.get_policy(actor=actor, organization=organization)
         for attr, value in validated_data.items():
             setattr(policy, attr, value)
+        if resolved_organization := OrganizationService.resolve_for_actor(actor, organization=organization):
+            policy.organization = resolved_organization
         policy.save()
         return policy
 
@@ -33,19 +41,21 @@ class LeavePolicyService:
 class LeaveBalanceService:
     @staticmethod
     def get_queryset_for_user(user):
-        queryset = LeaveBalance.objects.select_related("employee__user").all()
+        queryset = LeaveBalance.objects.for_current_org(user).select_related("employee__user")
         employee = getattr(user, "employee_profile", None)
 
         if user.role in {User.Role.HR, User.Role.ACCOUNTS, User.Role.ADMIN}:
             return queryset
         if user.role == User.Role.MANAGER and employee:
-            return queryset.filter(Q(employee=employee) | Q(employee__manager=employee) | Q(employee__secondary_manager=employee))
+            team_ids = EmployeeSelectors.get_team_member_ids(employee)
+            return queryset.filter(Q(employee=employee) | Q(employee_id__in=team_ids))
         if employee:
             return queryset.filter(employee=employee)
         return queryset.none()
 
     @staticmethod
     def create_balance(validated_data):
+        validated_data.setdefault("organization", getattr(validated_data.get("employee"), "organization", None))
         balance = LeaveBalance.objects.create(**validated_data)
         AuditService.log(actor=None, action="leave.balance.created", entity=balance, after=balance)
         return balance
@@ -112,7 +122,7 @@ class LeaveRequestService:
     @staticmethod
     def _validate_monthly_limit(employee, validated_data):
         leave_type = validated_data["leave_type"]
-        policy = LeavePolicyService.get_policy()
+        policy = LeavePolicyService.get_policy(actor=employee.user if employee else None)
         monthly_limit = Decimal("0")
         if leave_type == LeaveBalance.LeaveType.SICK:
             monthly_limit = policy.monthly_sick_leave_limit
@@ -202,7 +212,7 @@ class LeaveRequestService:
 
     @staticmethod
     def get_queryset_for_user(user):
-        queryset = LeaveRequest.objects.select_related("employee__user", "approver").all()
+        queryset = LeaveRequest.objects.for_current_org(user).select_related("employee__user", "approver")
         employee = getattr(user, "employee_profile", None)
         workflow_object_ids = LeaveRequestService._get_workflow_visible_object_ids(user)
 
@@ -221,9 +231,9 @@ class LeaveRequestService:
     def _get_approvable_queryset(user):
         employee = getattr(user, "employee_profile", None)
         if user.role in {User.Role.HR, User.Role.ADMIN}:
-            return LeaveRequest.objects.select_related("employee__user", "approver").all()
+            return LeaveRequest.objects.for_current_org(user).select_related("employee__user", "approver")
         if user.role == User.Role.MANAGER and employee:
-            return LeaveRequest.objects.select_related("employee__user", "approver").filter(
+            return LeaveRequest.objects.for_current_org(user).select_related("employee__user", "approver").filter(
                 Q(employee__manager=employee) | Q(employee__secondary_manager=employee)
             )
         return LeaveRequest.objects.none()
@@ -237,7 +247,7 @@ class LeaveRequestService:
 
         total_days = LeaveRequestService.calculate_total_days(validated_data, employee=employee)
         LeaveRequestService._validate_monthly_limit(employee, validated_data)
-        policy = LeavePolicyService.get_policy()
+        policy = LeavePolicyService.get_policy(actor=user)
         if validated_data["leave_type"] != LeaveBalance.LeaveType.LOP:
             balance = LeaveBalance.objects.select_for_update().filter(
                 employee=employee,
@@ -259,7 +269,12 @@ class LeaveRequestService:
         if overlapping:
             raise exceptions.ValidationError({"date_range": "An overlapping leave request already exists."})
 
-        leave_request = LeaveRequest.objects.create(employee=employee, total_days=total_days, **validated_data)
+        leave_request = LeaveRequest.objects.create(
+            employee=employee,
+            organization=employee.organization or OrganizationService.resolve_for_actor(user),
+            total_days=total_days,
+            **validated_data,
+        )
         assignment = WorkflowService.start_workflow(
             Workflow.Module.LEAVE_REQUEST,
             leave_request,
@@ -316,7 +331,7 @@ class LeaveRequestService:
         if leave_request.status == LeaveRequest.Status.APPROVED:
             return leave_request
 
-        policy = LeavePolicyService.get_policy()
+        policy = LeavePolicyService.get_policy(actor=user)
         balances = {
             balance.leave_type: balance
             for balance in LeaveBalance.objects.select_for_update().filter(employee=leave_request.employee)
@@ -416,7 +431,11 @@ class EarnedLeaveAdjustmentService:
         if duplicate:
             raise exceptions.ValidationError({"work_date": "An earned leave adjustment already exists for this work date."})
 
-        adjustment = EarnedLeaveAdjustment.objects.create(employee=employee, **validated_data)
+        adjustment = EarnedLeaveAdjustment.objects.create(
+            employee=employee,
+            organization=employee.organization or OrganizationService.resolve_for_actor(user),
+            **validated_data,
+        )
         AuditService.log(actor=user, action="leave.earned_adjustment.created", entity=adjustment, after=adjustment)
         return adjustment
 

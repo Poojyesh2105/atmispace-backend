@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from typing import Optional
 
 from django.db import transaction
 
@@ -23,13 +24,20 @@ def _previous_year_start(d: date) -> date:
 class LeaveCarryForwardService:
     @staticmethod
     @transaction.atomic
-    def process_carry_forward(target_month: date) -> int:
+    def process_carry_forward(target_month: date, organization=None) -> int:
         """
-        Process carry forward for all employees for the given month.
-        target_month: the month RECEIVING the carry forward (e.g., February receives January's unused days).
-        Returns count of employees processed.
+        Process leave carry-forward for employees in the given month.
+
+        Args:
+            target_month: The month RECEIVING the carry-forward
+                          (e.g. February receives January's unused days).
+            organization: If provided, only process employees belonging to this
+                          organization.  None = process all orgs (legacy behaviour).
+
+        Returns:
+            Count of employees processed.
         """
-        policy = LeavePolicyService.get_policy()
+        policy = LeavePolicyService.get_policy(organization=organization)
 
         if not policy.enable_carry_forward:
             return 0
@@ -46,10 +54,13 @@ class LeaveCarryForwardService:
         else:
             from_first = _subtract_one_month(target_first)
 
-        active_employees = Employee.objects.filter(is_active=True).select_related("user")
+        employee_qs = Employee.objects.filter(is_active=True).select_related("user")
+        if organization is not None:
+            employee_qs = employee_qs.filter(organization=organization)
+
         count = 0
 
-        for employee in active_employees:
+        for employee in employee_qs:
             employee_processed = False
             for leave_type in eligible_leave_types:
                 already_processed = LeaveCarryForwardLog.objects.filter(
